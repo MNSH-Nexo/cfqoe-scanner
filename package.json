@@ -1,0 +1,23 @@
+{
+  "name": "cfqoe-scanner",
+  "version": "0.4.0",
+  "description": "Application-level Cloudflare edge quality scanner",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "cfqoe": "./bin/cfqoe.js",
+    "cfqoe-origin": "./bin/cfqoe-origin.js"
+  },
+  "scripts": {
+    "start": "node ./bin/cfqoe.js",
+    "test": "chmod +x test/fixtures/fake-xray.js && node --test test/*.test.js",
+    "check": "find ./bin ./src ./scripts -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "smoke": "node ./scripts/smoke.js",
+    "preflight": "bash ./scripts/preflight.sh",
+    "sample": "node ./bin/cfqoe.js sample --ranges ./config/cloudflare-ipv4.txt --per-range 2 --max 20"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

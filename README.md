@@ -73,13 +73,13 @@ cfqoe help
 
 ## نصب سریع روی سرور
 
-> Repository خصوصی است؛ قبل از Clone باید SSH Key سرور به حساب GitHub اضافه شده باشد.
+> Repository عمومی است و Clone از طریق HTTPS بدون SSH Key انجام می‌شود.
 
 ```bash
-git clone git@github.com:MNSH-Nexo/cfqoe-scanner.git \
+git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git \
   && cd cfqoe-scanner \
   && bash scripts/preflight.sh \
-  && sudo bash scripts/install.sh \
+  && bash scripts/install.sh \
   && cfqoe help
 ```
 

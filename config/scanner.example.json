@@ -1,0 +1,64 @@
+{
+  "target": {
+    "host": "edge.example.com",
+    "port": 2052,
+    "security": "none",
+    "transport": "ws",
+    "path": "/ws"
+  },
+  "scan": {
+    "ranges": "./cloudflare-ipv4.txt",
+    "perRange": 4,
+    "maxCandidates": 60,
+    "rounds": 3,
+    "concurrency": 24,
+    "timeoutMs": 5000,
+    "minimumSuccessRate": 0.67,
+    "seed": 404
+  },
+  "browsing": {
+    "enabled": true,
+    "host": "probe.example.com",
+    "port": 443,
+    "security": "tls",
+    "protocol": "h2",
+    "manifestPath": "/cfqoe/manifest.json",
+    "limit": 15,
+    "rounds": 2,
+    "assetConcurrency": 6,
+    "timeoutMs": 8000
+  },
+  "streaming": {
+    "enabled": true,
+    "host": "probe.example.com",
+    "port": 443,
+    "security": "tls",
+    "protocol": "h2",
+    "manifestPath": "/cfqoe/stream/manifest.json",
+    "profiles": ["360p", "720p", "1080p"],
+    "limit": 10,
+    "rounds": 2,
+    "concurrency": 3,
+    "startupBufferSec": 8,
+    "safetyFactor": 1.25,
+    "stopOnUnsustainable": true,
+    "timeoutMs": 20000
+  },
+  "xray": {
+    "enabled": false,
+    "path": "auto",
+    "limit": 8,
+    "rounds": 2,
+    "concurrency": 2,
+    "startupTimeoutMs": 6000,
+    "shutdownGraceMs": 1500
+  },
+  "logging": {
+    "level": "info",
+    "directory": "../out/logs"
+  },
+  "output": {
+    "directory": "../out",
+    "top": 20
+  }
+}

@@ -1,0 +1,20 @@
+[Unit]
+Description=CFQoE controlled page workload origin
+After=network.target
+
+[Service]
+Type=simple
+User=cfqoe
+Group=cfqoe
+WorkingDirectory=/opt/cfqoe-scanner
+ExecStart=/usr/bin/env node /opt/cfqoe-scanner/bin/cfqoe-origin.js --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/cfqoe-scanner
+
+[Install]
+WantedBy=multi-user.target

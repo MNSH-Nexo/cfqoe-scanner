@@ -15,12 +15,15 @@ export function buildCandidateSummary({ ip, range, eligibility, tunnel }) {
 
   const browsingScore = browsingScores.length > 0 ? round(median(browsingScores), 1) : null;
   const streamingScore = streamingScores.length > 0 ? round(median(streamingScores), 1) : null;
+  const hasExperienceScore = browsingScore !== null || streamingScore !== null;
 
-  const overall = weightedScore([
-    { score: browsingScore === null ? null : browsingScore / 100, weight: 45 },
-    { score: streamingScore === null ? null : streamingScore / 100, weight: 40 },
-    { score: successRate, weight: 15 },
-  ]);
+  const overall = hasExperienceScore
+    ? weightedScore([
+        { score: browsingScore === null ? null : browsingScore / 100, weight: 45 },
+        { score: streamingScore === null ? null : streamingScore / 100, weight: 40 },
+        { score: successRate, weight: 15 },
+      ])
+    : null;
 
   return {
     ip,

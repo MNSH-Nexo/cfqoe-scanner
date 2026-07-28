@@ -48,36 +48,86 @@ function mulberry32(seed) {
   };
 }
 
+function normalizeRangeLine(line) {
+  const withoutComments = String(line).replace(/#.*$/, '').trim();
+  if (withoutComments.length === 0) return null;
+  const firstColumn = withoutComments.split(/\t+/)[0].trim();
+  if (firstColumn.length === 0) return null;
+  if (/^netblock$/i.test(firstColumn)) return null;
+  return firstColumn;
+}
+
+function shuffleInPlace(values, random) {
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
+  }
+  return values;
+}
+
 export function parseRangeList(text) {
   return String(text)
     .split(/\r?\n/)
-    .map((line) => line.replace(/#.*$/, '').trim())
-    .filter((line) => line.length > 0);
+    .map(normalizeRangeLine)
+    .filter(Boolean);
+}
+
+function drawIp(state, random, seen) {
+  const usable = state.size > 2 ? state.size - 2 : state.size;
+  const offset = state.size > 2 ? 1 : 0;
+  if (usable <= 0 || state.used.size >= usable) return null;
+
+  const guardLimit = Math.min(Math.max(usable * 2, 8), 2048);
+  for (let guard = 0; guard < guardLimit; guard += 1) {
+    const index = offset + Math.floor(random() * usable);
+    if (state.used.has(index)) continue;
+    state.used.add(index);
+    const ip = intToIp(state.base + index);
+    if (seen.has(ip)) continue;
+    seen.add(ip);
+    return ip;
+  }
+
+  for (let step = 0; step < usable; step += 1) {
+    const index = offset + step;
+    if (state.used.has(index)) continue;
+    state.used.add(index);
+    const ip = intToIp(state.base + index);
+    if (seen.has(ip)) continue;
+    seen.add(ip);
+    return ip;
+  }
+
+  return null;
 }
 
 // Samples usable host addresses, skipping network and broadcast addresses.
+// The sampler walks ranges in shuffled round-robin passes so a large catalog
+// still gets broad coverage before any range receives many extra picks.
 export function sampleCandidates({ ranges, perRange = 4, max = 60, seed = 404 }) {
   const random = mulberry32(seed);
   const seen = new Set();
   const candidates = [];
+  const states = shuffleInPlace(
+    ranges.map((entry) => {
+      const parsed = parseCidr(entry);
+      return {
+        ...parsed,
+        range: `${parsed.network}/${parsed.prefix}`,
+        used: new Set(),
+      };
+    }),
+    random,
+  );
 
-  for (const entry of ranges) {
-    const { base, size, network, prefix } = parseCidr(entry);
-    const usable = size > 2 ? size - 2 : size;
-    const offset = size > 2 ? 1 : 0;
-    const take = Math.min(perRange, usable);
-    let guard = 0;
-    let taken = 0;
-    while (taken < take && guard < take * 20) {
-      guard += 1;
-      const index = offset + Math.floor(random() * usable);
-      const ip = intToIp(base + index);
-      if (seen.has(ip)) continue;
-      seen.add(ip);
-      candidates.push({ ip, range: `${network}/${prefix}` });
-      taken += 1;
-      if (candidates.length >= max) return candidates;
+  for (let pass = 0; pass < perRange && candidates.length < max; pass += 1) {
+    for (const state of states) {
+      if (candidates.length >= max) break;
+      const ip = drawIp(state, random, seen);
+      if (!ip) continue;
+      candidates.push({ ip, range: state.range });
     }
   }
+
   return candidates;
 }

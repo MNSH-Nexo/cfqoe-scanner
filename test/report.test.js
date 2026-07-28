@@ -49,7 +49,7 @@ test('buildCandidateSummary aggregates every stage', () => {
   assert.equal(summary.streaming.quality, '1080p');
 });
 
-test('candidates without tunnel data still receive a reliability score', () => {
+test('candidates without tunnel data still receive reliability but no overall rank', () => {
   const summary = buildCandidateSummary({
     ip: '104.16.0.2',
     range: '104.16.0.0/13',
@@ -59,7 +59,7 @@ test('candidates without tunnel data still receive a reliability score', () => {
   assert.equal(summary.scores.browsing, null);
   assert.equal(summary.scores.streaming, null);
   assert.equal(summary.scores.reliability, 50);
-  assert.equal(summary.scores.overall, 50);
+  assert.equal(summary.scores.overall, null);
 });
 
 test('rankCandidates sorts by overall score', () => {

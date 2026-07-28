@@ -5,8 +5,8 @@ export const DEFAULT_SETTINGS = {
   version: 1,
   scan: {
     perRange: 3,
-    maxCandidates: 40,
-    rounds: 2,
+    maxCandidates: 120,
+    rounds: 3,
     concurrency: 12,
     timeoutMs: 6000,
     minimumSuccessRate: 0.6,

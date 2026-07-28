@@ -19,8 +19,10 @@ test('parseCidr normalizes to the network address', () => {
   assert.throws(() => parseCidr('104.16.0.0/40'));
 });
 
-test('parseRangeList strips comments and blank lines', () => {
-  const list = parseRangeList('# header\n104.16.0.0/13\n\n  172.64.0.0/13 # inline\n');
+test('parseRangeList strips comments, blank lines, and tabular exports', () => {
+  const list = parseRangeList(
+    'Netblock\tFrom IP\tTo IP\tNumber of IPs\n104.16.0.0/13\t104.16.0.0\t104.23.255.255\t524288\n\n  172.64.0.0/13 # inline\n',
+  );
   assert.deepEqual(list, ['104.16.0.0/13', '172.64.0.0/13']);
 });
 
@@ -34,6 +36,13 @@ test('sampleCandidates is deterministic and respects limits', () => {
 
   const capped = sampleCandidates({ ranges, perRange: 5, max: 4, seed: 7 });
   assert.equal(capped.length, 4);
+});
+
+test('sampleCandidates spreads early picks across many ranges', () => {
+  const ranges = Array.from({ length: 8 }, (_value, index) => `198.51.${index}.0/30`);
+  const candidates = sampleCandidates({ ranges, perRange: 2, max: 5, seed: 11 });
+  assert.equal(candidates.length, 5);
+  assert.equal(new Set(candidates.map((item) => item.range)).size, 5);
 });
 
 test('sampleCandidates skips network and broadcast addresses', () => {

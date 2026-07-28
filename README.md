@@ -95,6 +95,25 @@ Choose **3** first and paste your `vless://` link, then run **1 (Quick Scan)**.
 
 ---
 
+## Range catalog and scan depth
+
+The bundled IPv4 catalog is an **extended Cloudflare-oriented range set**. The sampler walks it
+in shuffled round-robin passes, so even a very large list gets broad coverage before any one
+range receives many extra picks.
+
+That matters in difficult networks: if many Cloudflare edges are blocked or unstable, a deeper
+full scan can still reach farther into the catalog instead of getting stuck near the top of the
+file.
+
+If you want an even longer hunt, raise these from **Advanced Settings**:
+
+- `scan.maxCandidates`
+- `scan.rounds`
+- `tunnel.limit`
+- `tunnel.rounds`
+
+---
+
 ## How the ranking works
 
 | Stage | What is measured | Used for ranking |
@@ -109,6 +128,9 @@ hits all candidates equally instead of unfairly punishing one IP.
 
 Streaming throughput is reported as the **10th percentile divided by a safety factor**, which
 is the bitrate a player can rely on, not the peak burst a speed test would show.
+
+Candidates that only pass the eligibility phase but never produce browsing or streaming data are
+kept in the report, but they do **not** receive an overall QoE score.
 
 Full details: [docs/METHODOLOGY.md](docs/METHODOLOGY.md)
 

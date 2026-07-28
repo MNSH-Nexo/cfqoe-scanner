@@ -134,7 +134,7 @@ async function makeH2Client(target) {
     socket.destroy();
     throw new Error(`HTTP/2 was not negotiated (ALPN=${socket.alpnProtocol || 'none'})`);
   }
-  const authority = `{{https://${target.host}}}:${target.port}`;
+  const authority = `https://${target.host}:${target.port}`;
   let session;
   try {
     session = http2.connect(authority, { createConnection: () => socket });

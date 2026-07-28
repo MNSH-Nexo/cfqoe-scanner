@@ -1,250 +1,194 @@
 # CFQoE Scanner
 
-> سنجش واقعی کیفیت Cloudflare با WebSocket، بارگذاری صفحه و streaming — بدون رتبه‌بندی بر اساس TCP ping یا speed-test چندکانکشنی.
+A Cloudflare clean-IP scanner for **Windows and Linux desktops** that ranks edge IPs by
+**real quality of experience**, not by ping.
 
-نسخهٔ **0.4.0** چهار مرحلهٔ کاربردی دارد و می‌تواند Browsing و Streaming را از داخل تونل واقعی VLESS اجرا کند:
+- **No TCP-ping ranking.** Connect time is recorded for diagnostics only.
+- **No multi-connection speed test.** Nothing is measured with parallel download streams.
+- **Ranking is based on what you actually feel:** how fast a real web page loads through the
+  tunnel, and whether a real video stream starts quickly and plays without rebuffering.
 
-```text
-Eligibility → Xray/VLESS Tunnel → Browsing + Streaming → Overall Score
-```
+Version 0.5.0 runs entirely on your own machine through an interactive terminal menu.
+No VPS and no origin server are required.
 
-## قابلیت‌ها
+---
 
-### Eligibility
+## Quick start
 
-- WebSocket Upgrade واقعی روی Candidate IP با Host، SNI و Path کانفیگ
-- Roundهای interleaved با ترتیب تصادفی
-- success rate، median، p90 و MAD
-- TCP connect فقط diagnostic است و در ranking دخالت ندارد
+### Requirements
 
-### Browsing
+| Component | Requirement |
+| --- | --- |
+| Node.js | 20 or newer (24 recommended) |
+| Xray-core | optional, but required for the browsing and streaming stages |
+| OS | Windows 10/11 x64, or Linux x64 |
 
-- Cold و Warm page load
-- document و هشت asset کوچک/متوسط
-- یک socket در HTTP/1.1
-- multiplex روی یک TLS session در HTTP/2
-- Browsing Score بر اساس success، cold، warm، TTFB p90 و MAD
-
-### Streaming
-
-- segmentهای چهارضانیه‌ای در پروفایل‌های 360p، 720p و 1080p
-- دانلود ترتیبی روی یک session
-- throughput هر segment و p10
-- startup delay
-- buffer simulation و rebuffer ratio
-- safety factor برای sustainable bitrate
-- توقف خودکار پس از پروفایل ناپایدار برای کاهش مصرف دیتا
-- Streaming Score و Overall Score
-
-### Logging و Debugging
-
-- یک فایل NDJSON مستقل برای هر Run
-- Run ID یکتا
-- Levelهای debug، info، warn و error
-- eventهای مرحله، Round، Candidate، Resource، Segment و Report
-- redaction خودکار UUID، credential، password، token و VLESS URI
-- فرمان `cfqoe diagnose` برای خلاصهٔ خطاها و کندترین eventها
-- mode برابر `0600` برای لاگ و گزارش
-
-### Real Tunnel / Xray
-
-- یک Xray موقت برای هر Candidate و Observation
-- SOCKS5 محلی روی `127.0.0.1` با پورت پویا
-- اجرای Browsing و Streaming از همان تونل VLESS
-- حذف قطعی config موقت در success و failure
-- نگه‌داری UUID فقط در حافظه و redaction کامل لاگ/گزارش
-
-## نیازمندی
-
-- Node.js 20 یا جدیدتر
-- Linux، macOS یا Termux
-- بدون dependency زمان اجرا
-- Xray Core فقط برای حالت `xray.enabled=true`
-
-## نصب
+### 1. Download
 
 ```bash
-unzip CFQoE-Scanner-v0.4.0.zip
+git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git
 cd cfqoe-scanner
-npm test
-sudo bash scripts/install.sh
-cfqoe help
 ```
 
-## نصب سریع روی سرور
+Or download the ZIP from GitHub and extract it anywhere. The tool is portable: it never
+writes outside its own folder and never needs administrator rights.
 
-> Repository عمومی است و Clone از طریق HTTPS بدون SSH Key انجام می‌شود.
+### 2. Add Xray (optional but recommended)
+
+Download the official Xray-core release for your platform and place the executable in the
+`xray/` folder inside the project:
+
+```
+cfqoe-scanner/xray/xray.exe    (Windows)
+cfqoe-scanner/xray/xray        (Linux, remember: chmod +x)
+```
+
+Without Xray the scanner still measures WebSocket eligibility, but it cannot open the real
+tunnel, so page-loading and streaming scores are skipped.
+
+### 3. Run
+
+**Windows** — double click `Start-CFQoE.cmd`, or from PowerShell:
+
+```powershell
+node bin\cfqoe.js
+```
+
+**Linux**
 
 ```bash
-git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git \
-  && cd cfqoe-scanner \
-  && bash scripts/preflight.sh \
-  && bash scripts/install.sh \
-  && cfqoe help
+chmod +x start-cfqoe.sh
+./start-cfqoe.sh
 ```
 
-برای حالت Real Tunnel، پس از نصب Xray Core:
+The menu opens:
+
+```
++--------------------------------------------+
+|      CFQoE Cloudflare IP Scanner  v0.5.0   |
+|  Ranked by real browsing and streaming     |
++--------------------------------------------+
+  config: ready   xray: found   platform: win32-x64
+
+  1. Quick Scan            fast check with a small candidate set
+  2. Full Scan             wider sampling and more rounds
+  3. VLESS Configuration   import, inspect or remove your config
+  4. Workload Settings     choose or add browsing and streaming targets
+  5. System Check          verify Node, Xray and file protection
+  6. Best IPs              show the latest ranking
+  7. Previous Results      list saved reports
+  8. Diagnostics           summarize the newest log file
+  9. Advanced Settings     tune rounds, limits and timeouts
+  0. Exit
+```
+
+Choose **3** first and paste your `vless://` link, then run **1 (Quick Scan)**.
+
+---
+
+## How the ranking works
+
+| Stage | What is measured | Used for ranking |
+| --- | --- | --- |
+| Eligibility | Real WebSocket upgrade (HTTP 101) against each candidate edge IP, `cf-ray` presence, success rate across interleaved rounds | Yes (15%) |
+| TCP connect | Connect time | **No** — diagnostics only |
+| Browsing | Cold page load, warm page load on a reused connection, TTFB p90, sub-resource success rate, timing stability (MAD) | Yes (45%) |
+| Streaming | HLS manifest parsing, **sequential** segment downloads, startup delay, simulated player buffer, stall count, rebuffer ratio, P10 sustainable throughput | Yes (40%) |
+
+Every candidate is measured once per round in a shuffled order, so a passing network hiccup
+hits all candidates equally instead of unfairly punishing one IP.
+
+Streaming throughput is reported as the **10th percentile divided by a safety factor**, which
+is the bitrate a player can rely on, not the peak burst a speed test would show.
+
+Full details: [docs/METHODOLOGY.md](docs/METHODOLOGY.md)
+
+---
+
+## Command line
+
+The menu is the main interface, but every action is scriptable:
 
 ```bash
-cp config/scanner.example.json config/scanner.json
-nano config/scanner.json
-nano config.secret.uri
-chmod 600 config.secret.uri
-cfqoe scan --config ./config/scanner.json --vless-file ./config.secret.uri --xray --debug
+cfqoe                       # interactive menu
+cfqoe import "vless://..."  # store your configuration locally
+cfqoe quick                 # reduced scan
+cfqoe scan --max 60 --tunnel-limit 8 --segments 4
+cfqoe scan --no-streaming --debug
+cfqoe check                 # environment check
+cfqoe results               # latest ranking
+cfqoe diagnose              # summarize the newest log
 ```
 
-## تنظیم اولیه
+On Windows replace `cfqoe` with `node bin\cfqoe.js`.
+
+| Option | Meaning |
+| --- | --- |
+| `--max N` | maximum candidate IPs |
+| `--rounds N` | eligibility rounds |
+| `--tunnel-limit N` | how many candidates go through the real tunnel |
+| `--tunnel-rounds N` | observations per candidate |
+| `--segments N` | streaming segments per observation |
+| `--no-tunnel` / `--no-browsing` / `--no-streaming` | skip a stage |
+| `--xray-path PATH` | explicit Xray executable |
+| `--debug` | verbose structured logging |
+
+---
+
+## Workloads
+
+Built-in defaults cover a documentation page, a Cloudflare page, Wikipedia, and two public HLS
+test streams. From menu option **4** you can toggle them or add your own:
+
+- a **page URL** for browsing tests
+- an **`.m3u8` manifest** for streaming tests
+
+Custom workloads are saved in `data/settings.json` and reused on every run.
+
+---
+
+## Output
+
+```
+results/run-<id>.json   full structured report (schema 5)
+results/latest.json     the most recent report
+results/best-ips.txt    plain tab-separated ranking
+logs/run-<id>.ndjson    structured event log
+```
+
+`best-ips.txt` example:
+
+```
+IP              Overall  Browsing  Streaming  Reliability  Quality
+104.18.23.11    91.4     93.2      89.0       100          1080p
+172.67.8.204    84.7     88.1      79.6       100          720p
+```
+
+---
+
+## Privacy and safety
+
+- Your `vless://` link is stored **only** in `data/config.secret.uri`, with `0600` permissions on
+  Linux and a restricted ACL on Windows.
+- The URI, the UUID, and any password-like value are redacted from every log line and never
+  appear in reports.
+- Temporary Xray configs are written to a `0700` temporary directory, deleted immediately after
+  each candidate, and every Xray process is stopped with SIGTERM and force-killed if needed.
+- Nothing is uploaded anywhere. All measurements stay on your machine.
+
+---
+
+## Testing
 
 ```bash
-cp config/scanner.example.json config/scanner.json
-nano config/scanner.json
-```
-
-کانفیگ VLESS را داخل فایل خصوصی قرار بده:
-
-```bash
-nano config.secret.uri
-chmod 600 config.secret.uri
-```
-
-اجرا:
-
-```bash
-cfqoe scan \
-  --config ./config/scanner.json \
-  --vless-file ./config.secret.uri
-```
-
-فایل‌های `*.uri` و `*.secret.json` در `.gitignore` هستند و credential وارد گزارش یا لاگ نمی‌شود.
-
-## حالت Real Tunnel
-
-در `config/scanner.json` فعال کن:
-
-```json
-{
-  "xray": {
-    "enabled": true,
-    "path": "auto",
-    "limit": 8,
-    "rounds": 2,
-    "concurrency": 2,
-    "startupTimeoutMs": 6000,
-    "shutdownGraceMs": 1500
-  }
-}
-```
-
-سپس Xray باید در `PATH`، متغیر `XRAY_PATH`، مسیر صریح `xray.path` یا `bin/xray` موجود باشد. اجرای حالت تونل بدون `--vless-file` رد می‌شود.
-
-```bash
-cfqoe scan --config ./config/scanner.json --vless-file ./config.secret.uri --xray
-```
-
-راهنمای کامل: [Real Tunnel / Xray](docs/XRAY_MODE.md)
-
-## Controlled Origin
-
-```bash
-cfqoe-origin --host 127.0.0.1 --port 8080
-```
-
-Endpointها:
-
-```text
-/healthz
-/cfqoe/manifest.json
-/cfqoe/page.html
-/cfqoe/assets/*
-/cfqoe/stream/manifest.json
-/cfqoe/stream/<quality>/segment-<n>.bin
-```
-
-این مسیرها را با reverse proxy پشت یک hostname دارای Proxy روشن Cloudflare قرار بده. راهنما در [Origin Deployment](docs/ORIGIN_DEPLOYMENT.md) است.
-
-## Streaming config
-
-```json
-{
-  "streaming": {
-    "enabled": true,
-    "host": "probe.example.com",
-    "port": 443,
-    "security": "tls",
-    "protocol": "h2",
-    "manifestPath": "/cfqoe/stream/manifest.json",
-    "profiles": ["360p", "720p", "1080p"],
-    "limit": 10,
-    "rounds": 2,
-    "startupBufferSec": 8,
-    "safetyFactor": 1.25,
-    "stopOnUnsustainable": true,
-    "timeoutMs": 20000
-  }
-}
-```
-
-## Logging
-
-```bash
-# لاگ استاندارد
-cfqoe scan --config ./config/scanner.json
-
-# دیباگ کامل resource و segment
-cfqoe scan --config ./config/scanner.json --debug
-
-# تشخیص خودکار
-cfqoe diagnose --log ./out/logs/run-....ndjson
-```
-
-راهنمای کامل: [Logging & Diagnostics](docs/LOGGING.md)
-
-## امتیازها
-
-### Browsing Score
-
-| مؤلفه | وزن |
-|---|---:|
-| موفقیت resource | 40% |
-| Cold page | 15% |
-| Warm page | 20% |
-| TTFB p90 | 15% |
-| Page MAD | 10% |
-
-### Streaming Score
-
-| مؤلفه | وزن |
-|---|---:|
-| موفقیت segment | 35% |
-| Startup delay | 15% |
-| Rebuffer ratio | 30% |
-| Sustainable bitrate | 20% |
-
-### Overall Score
-
-```text
-45% Browsing + 40% Streaming + 15% Eligibility reliability
-```
-
-فقط metricهای موجود وارد وزن نهایی می‌شوند و دادهٔ خام برای ممیزی حفظ می‌شود.
-
-## تست
-
-```bash
-npm run check
 npm test
 ```
 
-## مستندات
+The suite is fully offline: local HTTP servers, a local SOCKS5 server, a fake HLS origin, a fake
+edge that performs a WebSocket upgrade, and a fake Xray binary. No internet access is needed.
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Methodology](docs/METHODOLOGY.md)
-- [Origin Deployment](docs/ORIGIN_DEPLOYMENT.md)
-- [Logging & Diagnostics](docs/LOGGING.md)
-- [Security](docs/SECURITY.md)
-- [Real Tunnel / Xray](docs/XRAY_MODE.md)
-- [Server Test Checklist](docs/SERVER_TEST.md)
+---
 
-## مجوز
+## License
 
 MIT

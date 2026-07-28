@@ -1,88 +1,37 @@
 # Changelog
 
-## 0.4.0 — 2026-07-28
+## 0.5.0
+
+Complete rewrite as a desktop tool. The scanner now runs on your own Windows or Linux
+machine instead of a server, and is driven by an interactive terminal menu.
 
 ### Added
-
-- real VLESS tunnel mode using one temporary Xray process per candidate observation
-- local SOCKS5 client for HTTP/1.1، HTTP/2 and streaming workloads
-- runtime-only full VLESS parser with WS، TCP، gRPC، HTTPUpgrade، XHTTP، TLS and Reality metadata
-- secure temporary Xray config lifecycle (`0700` directory، `0600` config، guaranteed cleanup)
-- Xray startup and tunnel lifecycle structured events
-- report schema v4 with sanitized Xray configuration and tunnel observations
-- terminal Real Tunnel progress
-- fake-Xray integration fixture and complete CLI tunnel test
+- Interactive English terminal menu: quick scan, full scan, configuration import, workload
+  settings, system check, best IPs, previous results, diagnostics, advanced settings.
+- Native Windows support: `Start-CFQoE.cmd` launcher, `xray.exe` detection, restricted ACL on
+  the stored configuration, no Bash or WSL dependency.
+- Portable layout: `data/`, `results/`, `logs/` and `xray/` all live next to the application.
+- Built-in workload catalog plus user-defined page and HLS workloads saved in settings.
+- Streaming probe with HLS master/media playlist parsing, sequential segment downloads,
+  startup delay, simulated player buffer, stall detection and P10 sustainable bitrate.
+- Browsing probe with cold load, warm load on a reused connection, automatic sub-resource
+  discovery, TTFB percentiles and timing stability.
+- Report schema 5 with per-stage scores and an overall QoE score.
+- Offline test suite covering statistics, sampling, configuration parsing, redaction, SOCKS5,
+  HTTP client, browsing, streaming, scheduling, reporting, CLI parsing, WebSocket probing and
+  the Xray process manager.
 
 ### Changed
+- Ranking weights are now browsing 45%, streaming 40%, reliability 15%.
+- Xray is optional: without it the scanner still reports WebSocket eligibility.
 
-- Browsing and Streaming share the same VLESS tunnel when Xray mode is enabled
-- full regression suite expanded to 19 tests
-- logger redacts exact `id` keys in addition to credential aliases
+### Removed
+- The origin-server deployment path and all server-only installation scripts.
 
-### Fixed
+### Unchanged principles
+- TCP ping is never used for ranking.
+- No multi-connection speed test is performed.
 
-- proxy-capable HTTP/1.1 agent lifecycle
-- HTTP/2 authority construction and proxied TLS cleanup
-- CLI and full-pipeline tests now validate schema v4
-
-## 0.3.1 — 2026-07-28
-
-### Added
-
-- full CLI pipeline integration test covering eligibility، browsing، streaming، scoring and logs
-- `scripts/preflight.sh` for server readiness checks
-- dependency-free local smoke test
-- server deployment and low-traffic test checklist
-- local WebSocket upgrade endpoint for complete smoke validation
-
-### Fixed
-
-- upgraded sockets are now closed cleanly during smoke tests
-- release checks no longer match the smoke runner as an automatic Node test file
-- final executable permissions and package validation
-
-## 0.3.0 — 2026-07-28
-
-### Added
-
-- deterministic 360p، 720p و 1080p segment workloads
-- startup-buffer and rebuffer simulation
-- per-segment throughput، TTFB، success و error details
-- conservative sustainable bitrate using throughput p10 and safety factor
-- Streaming Score and Overall Score
-- adaptive stop after the first unsustainable profile
-- per-run structured NDJSON logger
-- debug/info/warn/error levels and unique Run IDs
-- stage، round، candidate، resource، segment and report events
-- recursive credential and VLESS URI redaction
-- `cfqoe diagnose` with error counts and slow-event analysis
-- log path inside report schema v3
-- logging، streaming and diagnostics tests
-
-### Changed
-
-- probe origin now serves deterministic stream segments
-- report schema upgraded to version 3
-- output ranking uses Overall Score when workload metrics exist
-
-## 0.2.0 — 2026-07-28
-
-### Added
-
-- controlled page-workload origin with deterministic resources
-- cold and warm page-load measurement
-- HTTP/1.1 keep-alive mode with one socket
-- HTTP/2 multiplexing over one TLS connection
-- manifest discovery on an isolated session
-- Browsing Score and schema v2 reports
-
-## 0.1.0 — 2026-07-28
-
-### Added
-
-- deterministic stratified IPv4 candidate sampling
-- bounded-memory handling for large CIDR ranges
-- interleaved multi-round scheduler
-- direct WebSocket eligibility probe
-- robust statistics and private reports
-- safe VLESS metadata parser
+## 0.4.0
+- Server-oriented release: real VLESS tunnel probing, SOCKS5 client, Xray config builder and
+  process manager, report schema 4, install and preflight scripts.

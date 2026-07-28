@@ -1,56 +1,79 @@
-# Measurement Methodology
+# Measurement methodology
 
-## Eligibility
+## Why not ping
 
-برای هر IP اتصال مستقیم ساخته و WebSocket Upgrade واقعی روی Host، SNI، Port و Path اجرا می‌شود. فقط پاسخ `101 Switching Protocols` موفق است. TCP connect در ranking استفاده نمی‌شود.
+A TCP handshake tells you how quickly a packet reaches the nearest Cloudflare edge. It says
+nothing about whether that edge will deliver a web page quickly, or whether it can sustain a
+video bitrate. Edges with excellent ping frequently deliver poor throughput, and edges with
+mediocre ping are often the most stable.
 
-## Browsing
+CFQoE therefore records connect time as a **diagnostic field only**. It never enters the score.
 
-Manifest روی session جدا دریافت می‌شود. سپس Cold و Warm page load با document و assetها اجرا می‌شود. HTTP/2 روی یک TLS session multiplex و HTTP/1.1 روی یک socket محدود می‌شود.
+## Why not a parallel speed test
 
-## Streaming
+Opening eight or sixteen parallel connections measures how much bandwidth you can grab in a
+burst. A video player does not behave that way: it downloads segments one after another and
+refills a buffer. A burst test can report 200 Mbps on a link that still stalls during playback.
 
-پروفایل‌ها از bitrate پایین به بالا آزمایش می‌شوند. segmentها ترتیبی و روی یک session دریافت می‌شوند.
+CFQoE downloads segments **sequentially**, exactly like a player, then simulates the buffer.
 
-برای هر segment:
+## Stage 1 — Eligibility
 
-```text
-throughput Mbps = bytes × 8 ÷ download seconds ÷ 1,000,000
+For each candidate IP the scanner performs a real WebSocket upgrade using the host, path and TLS
+parameters from your own configuration.
+
+- Accepted only on HTTP `101` with an `Upgrade: websocket` response header.
+- `cf-ray` is recorded when present.
+- Every candidate is probed once per round in shuffled order.
+- Candidates below the configured success rate never reach the expensive stages.
+
+Recorded: handshake median, handshake p90, handshake MAD, connect median (diagnostic),
+success rate.
+
+## Stage 2 — Real tunnel
+
+For the surviving candidates the scanner writes a temporary Xray configuration that keeps your
+WebSocket metadata but dials the specific candidate IP, and starts a short-lived Xray process
+with a private SOCKS inbound on `127.0.0.1`.
+
+All further traffic for that candidate goes through that tunnel, so measurements reflect the
+full path your client will actually use.
+
+## Stage 3 — Browsing
+
+1. **Cold load** — the HTML document over a fresh connection.
+2. **Sub-resources** — scripts, stylesheets and images discovered in the document, or the
+   explicit asset list of a custom workload.
+3. **Warm load** — the same document over the reused keep-alive connection.
+
+Score components: resource success rate (40), cold load (15), warm load (20), TTFB p90 (15),
+timing stability measured as MAD (10).
+
+## Stage 4 — Streaming
+
+1. The `.m3u8` manifest is fetched. Master playlists are resolved to a media playlist.
+2. Segments are downloaded **one at a time**.
+3. A player buffer is simulated: the startup buffer must fill before playback begins, and the
+   buffer then drains by download time and refills by segment duration.
+
+Recorded: startup delay, stall count, rebuffer ratio, median throughput, P10 throughput, and a
+sustainable bitrate defined as `P10 / safetyFactor`. The sustainable bitrate maps to a quality
+label such as 720p or 1080p.
+
+Score components: segment success rate (35), startup delay (15), rebuffer ratio (30),
+sustainable bitrate (20).
+
+## Overall score
+
+```
+overall = 0.45 * browsing + 0.40 * streaming + 0.15 * reliability
 ```
 
-به‌جای میانگین، p10 throughput استفاده می‌شود. پروفایل زمانی sustainable است که:
+Missing components are dropped and the remaining weights are renormalized, so a candidate that
+never reached the tunnel stage is still ranked by reliability rather than being silently
+discarded.
 
-1. همهٔ segmentها موفق باشند.
-2. playback پس از Startup Buffer آغاز شود.
-3. rebuffer صفر باشد.
-4. throughput p10 حداقل `bitrate × safetyFactor` باشد.
+## Robust statistics
 
-اگر پروفایل sustainable نباشد، پروفایل‌های سنگین‌تر به‌طور پیش‌فرض تست نمی‌شوند.
-
-## Buffer simulation
-
-پیش از شروع playback، segmentها تا رسیدن buffer به `startupBufferSec` دانلود می‌شوند. پس از شروع، زمان دانلود هر segment از buffer کم می‌شود. اگر زمان دانلود بیشتر از buffer باشد، اختلاف آن stall محسوب می‌شود.
-
-```text
-rebuffer ratio = total stall seconds ÷ tested video seconds
-```
-
-## آمار مقاوم
-
-- Median برای تجربهٔ معمول
-- P90 برای شرایط ضعیف‌تر
-- P10 برای throughput محافظه‌کارانه
-- MAD برای نوسان
-- چند Round با ترتیب interleaved
-
-## امتیاز نهایی
-
-```text
-Overall = 45% Browsing + 40% Streaming + 15% Eligibility
-```
-
-اگر یک workload غیرفعال باشد، وزن metricهای موجود normalize می‌شود. تمام observationها و جزئیات segmentها در JSON و لاگ ساختاریافته حفظ می‌شوند.
-
-## محدودیت تفسیر
-
-نتیجه مخصوص شبکه، ISP، زمان، Candidate IP، Host/SNI، protocol و workload همان اجراست. نتیجهٔ یک اپراتور نباید به همهٔ کاربران تعمیم داده شود.
+Medians, percentiles and median absolute deviation are used everywhere instead of averages.
+One slow observation caused by local congestion cannot dominate a candidate's score.

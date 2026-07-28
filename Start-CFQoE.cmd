@@ -10,6 +10,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not exist "xray\xray.exe" (
+  echo Xray not found. Downloading the official build into .\xray ...
+  node scripts\install-xray.mjs
+  if errorlevel 1 (
+    echo Failed to install Xray automatically.
+    pause
+    exit /b 1
+  )
+)
+
 node bin\cfqoe.js %*
 if errorlevel 1 pause
 endlocal

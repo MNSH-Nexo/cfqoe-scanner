@@ -51,13 +51,9 @@ export async function xrayVersion(xrayPath) {
 export function xrayInstallHint() {
   const layout = paths();
   const target = path.join(layout.xray, xrayFileName());
-  return isWindows
-    ? [
-        'Xray was not found. Download Xray-windows-64.zip from the official Xray-core releases page,',
-        `then copy xray.exe into: ${target}`,
-      ].join(' ')
-    : [
-        'Xray was not found. Download Xray-linux-64.zip from the official Xray-core releases page,',
-        `then copy the xray binary into: ${target} and run chmod +x on it.`,
-      ].join(' ');
+  return [
+    'Xray was not found.',
+    'Run "npm run xray:install" or launch the platform starter while online to download the official Xray-core build into:',
+    target,
+  ].join(' ');
 }

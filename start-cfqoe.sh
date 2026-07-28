@@ -14,4 +14,9 @@ if [ "$major" -lt 20 ]; then
   exit 1
 fi
 
+if [ ! -x "xray/xray" ]; then
+  echo "Xray not found. Downloading the official build into ./xray ..."
+  node scripts/install-xray.mjs
+fi
+
 exec node bin/cfqoe.js "$@"

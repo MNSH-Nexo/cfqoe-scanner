@@ -20,7 +20,7 @@ No VPS and no origin server are required.
 | Component | Requirement |
 | --- | --- |
 | Node.js | 20 or newer (24 recommended) |
-| Xray-core | optional, but required for the browsing and streaming stages |
+| Xray-core | auto-downloaded on first launch when online |
 | OS | Windows 10/11 x64, or Linux x64 |
 
 ### 1. Download
@@ -33,10 +33,19 @@ cd cfqoe-scanner
 Or download the ZIP from GitHub and extract it anywhere. The tool is portable: it never
 writes outside its own folder and never needs administrator rights.
 
-### 2. Add Xray (optional but recommended)
+### 2. Xray bootstrap
 
-Download the official Xray-core release for your platform and place the executable in the
-`xray/` folder inside the project:
+On the first launch, the Windows and Linux starters automatically download the official
+Xray-core build for the current platform and place it in the local `xray/` folder.
+
+You can also do it manually:
+
+```bash
+npm run xray:install
+```
+
+If the machine is offline, or if automatic download is blocked, you can still place the
+binary manually:
 
 ```
 cfqoe-scanner/xray/xray.exe    (Windows)
@@ -118,6 +127,7 @@ cfqoe scan --no-streaming --debug
 cfqoe check                 # environment check
 cfqoe results               # latest ranking
 cfqoe diagnose              # summarize the newest log
+npm run xray:install        # fetch the official Xray binary into ./xray
 ```
 
 On Windows replace `cfqoe` with `node bin\cfqoe.js`.

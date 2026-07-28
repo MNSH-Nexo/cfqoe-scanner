@@ -1,71 +1,73 @@
-export function buildXrayConfig(runtime, candidateIp, socksPort) {
-  if (!runtime?.id) throw new Error('VLESS runtime credential is required');
-  if (!candidateIp) throw new Error('Candidate IP is required');
-  const p = runtime.params || {};
-  const network = runtime.transport;
-  const security = runtime.security;
-  const stream = { network, security };
+// Builds a temporary Xray config that dials a specific candidate edge IP
+// while preserving the WebSocket metadata of the user configuration.
+export function buildXrayConfig({ vless, candidateIp, socksPort, logLevel = 'warning' }) {
+  if (!candidateIp) throw new Error('candidateIp is required');
+  if (!Number.isInteger(socksPort)) throw new Error('socksPort must be an integer');
 
-  if (security === 'tls') {
-    stream.tlsSettings = {
-      serverName: runtime.sni,
-      allowInsecure: ['1', 'true'].includes(String(p.allowInsecure || '').toLowerCase()),
-      fingerprint: runtime.fingerprint || 'chrome',
+  const streamSettings = {
+    network: vless.transport === 'ws' ? 'ws' : vless.transport,
+    security: vless.security === 'tls' ? 'tls' : 'none',
+  };
+
+  if (streamSettings.network === 'ws') {
+    streamSettings.wsSettings = {
+      path: vless.path,
+      headers: { Host: vless.host },
     };
-    if (p.alpn) stream.tlsSettings.alpn = p.alpn.split(',').map((item) => item.trim()).filter(Boolean);
-  } else if (security === 'reality') {
-    stream.realitySettings = {
-      serverName: runtime.sni,
-      fingerprint: runtime.fingerprint || 'chrome',
-      publicKey: p.pbk || '',
-      shortId: p.sid || '',
-      spiderX: decodeURIComponent(p.spx || '/'),
-    };
-  } else if (security !== 'none') {
-    throw new Error(`Unsupported VLESS security: ${security}`);
   }
 
-  if (network === 'ws') {
-    stream.wsSettings = {
-      path: runtime.path,
-      headers: { Host: runtime.host },
+  if (streamSettings.security === 'tls') {
+    streamSettings.tlsSettings = {
+      serverName: vless.sni || vless.host,
+      allowInsecure: Boolean(vless.allowInsecure),
+      ...(vless.fingerprint ? { fingerprint: vless.fingerprint } : {}),
     };
-  } else if (network === 'grpc') {
-    stream.grpcSettings = {
-      serviceName: decodeURIComponent(p.serviceName || ''),
-      multiMode: p.mode === 'multi',
-      authority: p.authority || undefined,
-    };
-  } else if (network === 'httpupgrade') {
-    stream.httpupgradeSettings = { path: runtime.path, host: runtime.host };
-  } else if (network === 'xhttp' || network === 'splithttp') {
-    stream.xhttpSettings = {
-      path: runtime.path,
-      host: runtime.host,
-      mode: p.mode || 'auto',
-      extra: p.extra ? JSON.parse(decodeURIComponent(p.extra)) : undefined,
-    };
-  } else if (network !== 'tcp') {
-    throw new Error(`Unsupported VLESS transport: ${network}`);
   }
 
   return {
-    log: { loglevel: 'warning' },
-    inbounds: [{
-      tag: 'cfqoe-socks', listen: '127.0.0.1', port: socksPort,
-      protocol: 'socks', settings: { auth: 'noauth', udp: false },
-      sniffing: { enabled: true, destOverride: ['http', 'tls'] },
-    }],
-    outbounds: [{
-      tag: 'candidate-vless', protocol: 'vless',
-      settings: {
-        vnext: [{
-          address: candidateIp,
-          port: runtime.port,
-          users: [{ id: runtime.id, encryption: runtime.encryption || 'none', flow: runtime.flow || '' }],
-        }],
+    log: { loglevel: logLevel },
+    inbounds: [
+      {
+        tag: 'cfqoe-socks',
+        listen: '127.0.0.1',
+        port: socksPort,
+        protocol: 'socks',
+        settings: { auth: 'noauth', udp: false },
       },
-      streamSettings: stream,
-    }],
+    ],
+    outbounds: [
+      {
+        tag: 'cfqoe-vless',
+        protocol: 'vless',
+        settings: {
+          vnext: [
+            {
+              address: candidateIp,
+              port: vless.port,
+              users: [
+                {
+                  id: vless.id,
+                  encryption: vless.encryption || 'none',
+                  ...(vless.flow ? { flow: vless.flow } : {}),
+                },
+              ],
+            },
+          ],
+        },
+        streamSettings,
+      },
+    ],
+  };
+}
+
+// Non-sensitive view for reports and logs.
+export function describeXrayConfig(config) {
+  const outbound = config.outbounds[0];
+  return {
+    candidateIp: outbound.settings.vnext[0].address,
+    port: outbound.settings.vnext[0].port,
+    network: outbound.streamSettings.network,
+    security: outbound.streamSettings.security,
+    socksPort: config.inbounds[0].port,
   };
 }

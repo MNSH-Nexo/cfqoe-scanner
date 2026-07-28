@@ -1,89 +1,83 @@
-import fs from 'node:fs/promises';
+// Deterministic Cloudflare IPv4 candidate sampling.
 
-export function ipv4ToInt(ip) {
-  const parts = String(ip).trim().split('.').map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    throw new Error(`Invalid IPv4 address: ${ip}`);
+export function ipToInt(ip) {
+  const parts = String(ip).trim().split('.');
+  if (parts.length !== 4) throw new Error(`Invalid IPv4 address: ${ip}`);
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) throw new Error(`Invalid IPv4 address: ${ip}`);
+    const octet = Number(part);
+    if (octet > 255) throw new Error(`Invalid IPv4 address: ${ip}`);
+    value = value * 256 + octet;
   }
-  return (((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3]);
+  return value;
 }
 
-export function intToIpv4(value) {
-  if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) throw new Error('IPv4 integer is out of range');
+export function intToIp(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 4294967295) {
+    throw new Error(`Invalid IPv4 integer: ${value}`);
+  }
   return [
-    Math.floor(value / 0x1000000) % 256,
-    Math.floor(value / 0x10000) % 256,
-    Math.floor(value / 0x100) % 256,
+    Math.floor(value / 16777216) % 256,
+    Math.floor(value / 65536) % 256,
+    Math.floor(value / 256) % 256,
     value % 256,
   ].join('.');
 }
 
-export function parseCidr(input) {
-  const text = String(input).trim();
-  const [address, prefixText = '32'] = text.split('/');
+export function parseCidr(cidr) {
+  const text = String(cidr).trim();
+  const [address, prefixText] = text.split('/');
   const prefix = Number(prefixText);
-  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) throw new Error(`Invalid CIDR prefix: ${input}`);
-  const raw = ipv4ToInt(address);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+    throw new Error(`Invalid CIDR prefix: ${cidr}`);
+  }
   const size = 2 ** (32 - prefix);
-  const network = Math.floor(raw / size) * size;
-  return { cidr: `${intToIpv4(network)}/${prefix}`, network, prefix, size };
+  const base = Math.floor(ipToInt(address) / size) * size;
+  return { network: intToIp(base), prefix, base, size };
 }
 
-export function createRng(seed = Date.now()) {
-  let state = (Number(seed) >>> 0) || 0x6d2b79f5;
-  return () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return (state >>> 0) / 0x100000000;
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return function next() {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-export function sampleNetwork(network, perRange, rng) {
-  const reserveEdges = network.prefix <= 30;
-  const first = network.network + (reserveEdges ? 1 : 0);
-  const last = network.network + network.size - 1 - (reserveEdges ? 1 : 0);
-  const count = Math.max(0, last - first + 1);
-  const wanted = Math.min(Math.max(0, perRange), count);
-  if (!wanted) return [];
-
-  // Stratified sampling gives broad coverage without materializing /24 lists.
-  const picks = new Set();
-  for (let index = 0; index < wanted; index += 1) {
-    const lower = Math.floor(index * count / wanted);
-    const upper = Math.max(lower + 1, Math.floor((index + 1) * count / wanted));
-    const offset = lower + Math.floor(rng() * (upper - lower));
-    picks.add(first + Math.min(offset, count - 1));
-  }
-  return [...picks].map(intToIpv4);
+export function parseRangeList(text) {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#.*$/, '').trim())
+    .filter((line) => line.length > 0);
 }
 
-export function sampleRanges(cidrLines, { perRange = 4, maxCandidates = 100, seed = 404 } = {}) {
-  const rng = createRng(seed);
-  const networks = cidrLines.map(parseCidr);
-  const candidates = [];
+// Samples usable host addresses, skipping network and broadcast addresses.
+export function sampleCandidates({ ranges, perRange = 4, max = 60, seed = 404 }) {
+  const random = mulberry32(seed);
   const seen = new Set();
+  const candidates = [];
 
-  for (const network of networks) {
-    for (const ip of sampleNetwork(network, perRange, rng)) {
-      if (!seen.has(ip)) {
-        seen.add(ip);
-        candidates.push(ip);
-      }
+  for (const entry of ranges) {
+    const { base, size, network, prefix } = parseCidr(entry);
+    const usable = size > 2 ? size - 2 : size;
+    const offset = size > 2 ? 1 : 0;
+    const take = Math.min(perRange, usable);
+    let guard = 0;
+    let taken = 0;
+    while (taken < take && guard < take * 20) {
+      guard += 1;
+      const index = offset + Math.floor(random() * usable);
+      const ip = intToIp(base + index);
+      if (seen.has(ip)) continue;
+      seen.add(ip);
+      candidates.push({ ip, range: `${network}/${prefix}` });
+      taken += 1;
+      if (candidates.length >= max) return candidates;
     }
   }
-
-  // Deterministic Fisher-Yates shuffle prevents range-order bias.
-  for (let i = candidates.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(rng() * (i + 1));
-    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-  }
-  return { networks, candidates: candidates.slice(0, maxCandidates) };
-}
-
-export async function loadRangeLines(filePath) {
-  const raw = await fs.readFile(filePath, 'utf8');
-  return raw.split(/\r?\n/)
-    .map((line) => line.replace(/#.*/, '').trim())
-    .filter(Boolean);
+  return candidates;
 }

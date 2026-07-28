@@ -1,93 +1,111 @@
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
-const LEVELS = { debug: 10, info: 20, warn: 30, error: 40, silent: 99 };
-const SENSITIVE_KEY = /(^id$|uuid|credential|password|passwd|authorization|proxy-authorization|token|secret|private.?key|uri)$/i;
+const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
-export function makeRunId() {
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  return `${stamp}-${crypto.randomBytes(3).toString('hex')}`;
-}
+const UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+const VLESS_PATTERN = /vless:\/\/\S+/gi;
+const SENSITIVE_KEYS = /^(id|uuid|password|token|secret|credential|authorization|uri|vless)$/i;
 
-function cleanString(value) {
-  if (/vless:\/\//i.test(value)) return '[REDACTED_VLESS_URI]';
-  return value.length > 4096 ? `${value.slice(0, 4096)}…[TRUNCATED]` : value;
-}
-
-export function redact(value, key = '', seen = new WeakSet()) {
-  if (SENSITIVE_KEY.test(key)) {
-    return typeof value === 'string' && /vless:\/\//i.test(value)
-      ? '[REDACTED_VLESS_URI]'
-      : '[REDACTED]';
+export function redact(value, seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    return value.replace(VLESS_PATTERN, '[REDACTED_VLESS_URI]').replace(UUID_PATTERN, '[REDACTED_UUID]');
   }
-  if (typeof value === 'string') return cleanString(value);
-  if (value == null || typeof value !== 'object') return value;
-  if (value instanceof Error) return serializeError(value);
-  if (Buffer.isBuffer(value)) return `[BUFFER ${value.length} bytes]`;
-  if (seen.has(value)) return '[CIRCULAR]';
+  if (typeof value === 'bigint') return value.toString();
+  if (!value || typeof value !== 'object') return value;
+  if (Buffer.isBuffer(value)) return `[buffer ${value.length} bytes]`;
+  if (seen.has(value)) return '[circular]';
   seen.add(value);
-  if (Array.isArray(value)) return value.map((item) => redact(item, '', seen));
-  return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, redact(child, childKey, seen)]));
+
+  if (Array.isArray(value)) return value.map((item) => redact(item, seen));
+
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    output[key] = SENSITIVE_KEYS.test(key) ? '[REDACTED]' : redact(item, seen);
+  }
+  return output;
 }
 
-export function serializeError(error) {
-  if (!(error instanceof Error)) return { message: cleanString(String(error)) };
-  return {
-    name: error.name,
-    message: cleanString(error.message),
-    code: error.code || undefined,
-    stack: error.stack ? cleanString(error.stack) : undefined,
-    cause: error.cause ? redact(error.cause, 'cause') : undefined,
-  };
-}
+export function createLogger({ level = 'info', directory = null, runId = randomUUID(), quiet = false } = {}) {
+  const threshold = LEVELS[level] ?? LEVELS.info;
+  let stream = null;
+  let filePath = null;
 
-export async function createLogger({ directory, level = 'info', runId = makeRunId(), context = {} }) {
-  if (!(level in LEVELS)) throw new Error(`Unknown log level: ${level}`);
-  await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
-  await fsp.chmod(directory, 0o700);
-  const filePath = path.join(directory, `run-${runId}.ndjson`);
-  const stream = fs.createWriteStream(filePath, { flags: 'a', mode: 0o600 });
-  await new Promise((resolve, reject) => {
-    stream.once('open', resolve);
-    stream.once('error', reject);
-  });
-  await fsp.chmod(filePath, 0o600);
-  const threshold = LEVELS[level];
-  let closed = false;
+  if (directory) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    filePath = path.join(directory, `run-${runId}.ndjson`);
+    stream = fs.createWriteStream(filePath, { flags: 'a', mode: 0o600 });
+  }
 
-  const build = (baseContext) => {
-    const logger = {
+  const counters = { debug: 0, info: 0, warn: 0, error: 0 };
+
+  function write(levelName, event, details) {
+    if ((LEVELS[levelName] ?? 0) < threshold) return;
+    counters[levelName] += 1;
+    const record = {
+      time: new Date().toISOString(),
       runId,
-      path: filePath,
-      level,
-      child(extra = {}) { return build({ ...baseContext, ...redact(extra) }); },
-      log(logLevel, event, data = {}) {
-        if (closed || LEVELS[logLevel] < threshold) return;
-        const entry = {
-          ts: new Date().toISOString(), level: logLevel, runId, event,
-          ...baseContext, ...redact(data),
-        };
-        stream.write(`${JSON.stringify(entry)}\n`);
-      },
-      debug(event, data) { logger.log('debug', event, data); },
-      info(event, data) { logger.log('info', event, data); },
-      warn(event, data) { logger.log('warn', event, data); },
-      error(event, data) { logger.log('error', event, data); },
-      async close() {
-        if (closed) return;
-        closed = true;
-        await new Promise((resolve) => stream.end(resolve));
-      },
+      level: levelName,
+      event,
+      ...redact(details || {}),
     };
-    return logger;
-  };
+    if (stream) stream.write(`${JSON.stringify(record)}\n`);
+    if (!quiet && (levelName === 'warn' || levelName === 'error')) {
+      process.stderr.write(`[${levelName}] ${event}\n`);
+    }
+  }
 
-  return build(redact(context));
+  return {
+    runId,
+    filePath,
+    counters,
+    debug: (event, details) => write('debug', event, details),
+    info: (event, details) => write('info', event, details),
+    warn: (event, details) => write('warn', event, details),
+    error: (event, details) => write('error', event, details),
+    async close() {
+      if (!stream) return;
+      await new Promise((resolve) => stream.end(resolve));
+    },
+  };
 }
 
-export const nullLogger = Object.freeze({
-  runId: null, path: null, level: 'silent',
-  child() { return this; }, log() {}, debug() {}, info() {}, warn() {}, error() {}, async close() {},
-});
+export function summarizeLogFile(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const events = raw
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+
+  const byLevel = { debug: 0, info: 0, warn: 0, error: 0 };
+  const errors = [];
+  const slowest = [];
+
+  for (const event of events) {
+    if (byLevel[event.level] !== undefined) byLevel[event.level] += 1;
+    if (event.level === 'error' || event.level === 'warn') {
+      errors.push({ event: event.event, reason: event.error || event.reason || null });
+    }
+    if (Number.isFinite(event.durationMs)) {
+      slowest.push({ event: event.event, durationMs: event.durationMs });
+    }
+  }
+
+  slowest.sort((a, b) => b.durationMs - a.durationMs);
+
+  return {
+    total: events.length,
+    byLevel,
+    errors: errors.slice(0, 20),
+    slowest: slowest.slice(0, 10),
+    runId: events[0]?.runId || null,
+  };
+}

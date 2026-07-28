@@ -1,86 +1,85 @@
-function required(value, label) {
-  if (!value) throw new Error(`${label} is missing from the VLESS URI`);
-  return value;
-}
+// Runtime-only VLESS parser. The full URI and UUID never leave memory.
 
-function parseCore(raw) {
-  const uri = String(raw ?? '').trim();
-  if (!uri.startsWith('vless://')) throw new Error('Only vless:// URIs are supported');
-  let parsed;
-  try { parsed = new URL(uri); }
-  catch { throw new Error('The VLESS URI is malformed'); }
-
-  const port = Number(parsed.port || 443);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error('The VLESS port must be between 1 and 65535');
+function decode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
-  const params = Object.fromEntries(parsed.searchParams.entries());
-  const security = (params.security || 'none').toLowerCase();
-  const transport = (params.type || params.net || 'tcp').toLowerCase();
-  const host = params.host || parsed.hostname;
-  const resourcePath = decodeURIComponent(params.path || '/');
+}
+
+export function parseVlessUri(uri) {
+  const text = String(uri || '').trim();
+  if (!text.toLowerCase().startsWith('vless://')) {
+    throw new Error('Configuration must start with vless://');
+  }
+
+  const withoutScheme = text.slice('vless://'.length);
+  const hashIndex = withoutScheme.indexOf('#');
+  const label = hashIndex === -1 ? '' : decode(withoutScheme.slice(hashIndex + 1));
+  const body = hashIndex === -1 ? withoutScheme : withoutScheme.slice(0, hashIndex);
+
+  const atIndex = body.lastIndexOf('@');
+  if (atIndex === -1) throw new Error('VLESS configuration is missing credentials');
+
+  const uuid = decode(body.slice(0, atIndex)).trim();
+  if (!/^[0-9a-fA-F-]{8,}$/.test(uuid)) throw new Error('VLESS configuration has an invalid id');
+
+  const rest = body.slice(atIndex + 1);
+  const questionIndex = rest.indexOf('?');
+  const authority = questionIndex === -1 ? rest : rest.slice(0, questionIndex);
+  const queryText = questionIndex === -1 ? '' : rest.slice(questionIndex + 1);
+
+  const colonIndex = authority.lastIndexOf(':');
+  if (colonIndex === -1) throw new Error('VLESS configuration is missing a port');
+  const address = authority.slice(0, colonIndex).replace(/^\[|\]$/g, '');
+  const port = Number(authority.slice(colonIndex + 1));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`VLESS port is invalid: ${authority.slice(colonIndex + 1)}`);
+  }
+
+  const params = new URLSearchParams(queryText);
+  const transport = (params.get('type') || 'tcp').toLowerCase();
+  const security = (params.get('security') || 'none').toLowerCase();
+  const host = decode(params.get('host') || address);
+  const sni = decode(params.get('sni') || (security === 'tls' ? host : ''));
+  const path = decode(params.get('path') || '/');
+
   return {
-    uri,
-    id: decodeURIComponent(parsed.username || ''),
-    host: required(host, 'Host'),
-    address: required(parsed.hostname, 'Address'),
+    id: uuid,
+    address,
     port,
-    security,
+    host,
+    sni: sni || host,
+    path: path.startsWith('/') ? path : `/${path}`,
     transport,
-    path: resourcePath.startsWith('/') ? resourcePath : `/${resourcePath}`,
-    sni: params.sni || params.peer || host,
-    fingerprint: params.fp || 'chrome',
-    name: decodeURIComponent(parsed.hash.slice(1) || parsed.hostname),
-    encryption: params.encryption || 'none',
-    flow: params.flow || '',
-    params,
+    security,
+    encryption: params.get('encryption') || 'none',
+    flow: params.get('flow') || '',
+    fingerprint: params.get('fp') || '',
+    allowInsecure: params.get('allowInsecure') === '1',
+    label,
   };
 }
 
-export function parseVlessUri(raw) {
-  const parsed = parseCore(raw);
+// Safe view for logs, reports and the terminal menu.
+export function describeVless(config) {
   return {
-    host: parsed.host,
-    address: parsed.address,
-    port: parsed.port,
-    security: parsed.security,
-    transport: parsed.transport,
-    path: parsed.path,
-    sni: parsed.sni,
-    fingerprint: parsed.fingerprint,
-    name: parsed.name,
-    credentialPresent: Boolean(parsed.id),
+    address: config.address,
+    port: config.port,
+    host: config.host,
+    sni: config.sni,
+    path: config.path,
+    transport: config.transport,
+    security: config.security,
+    label: config.label || null,
+    idPresent: Boolean(config.id),
   };
 }
 
-export function parseVlessRuntime(raw) {
-  const parsed = parseCore(raw);
-  if (!parsed.id) throw new Error('VLESS credential/UUID is missing');
-  return parsed;
-}
-
-export function toProbeTarget(config) {
-  if (!config || typeof config !== 'object') throw new Error('Target configuration is missing');
-  const port = Number(config.port || (config.security === 'none' ? 80 : 443));
-  if (!config.host) throw new Error('Target host is required');
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid target port');
-  return {
-    host: String(config.host),
-    port,
-    security: String(config.security || 'none').toLowerCase(),
-    transport: String(config.transport || 'ws').toLowerCase(),
-    path: String(config.path || '/').startsWith('/') ? String(config.path || '/') : `/${config.path}`,
-    sni: String(config.sni || config.host),
-  };
-}
-
-export function redactTarget(target) {
-  return {
-    host: target.host,
-    port: target.port,
-    security: target.security,
-    transport: target.transport,
-    path: target.path,
-    sni: target.sni,
-  };
+export function assertWebsocketCapable(config) {
+  if (config.transport !== 'ws') {
+    throw new Error(`Only WebSocket transport is supported for scanning, found: ${config.transport}`);
+  }
+  return true;
 }

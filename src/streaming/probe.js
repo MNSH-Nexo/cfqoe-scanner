@@ -1,114 +1,196 @@
-import { performance } from 'node:perf_hooks';
-import { createPageClient } from '../browsing/client.js';
-import { quantile, round } from '../stats/robust.js';
-import { simulateBuffer } from './buffer.js';
-import { nullLogger } from '../logging/logger.js';
+import { createHttpClient } from '../net/http.js';
+import { median, percentile, scoreLowerBetter, scoreHigherBetter, weightedScore, round } from '../stats.js';
 
-function normalizeManifest(raw, wantedProfiles) {
-  if (!raw || typeof raw !== 'object') throw new Error('Streaming manifest must be an object');
-  const segmentDurationSec = Number(raw.segmentDurationSec || 4);
-  if (!Number.isFinite(segmentDurationSec) || segmentDurationSec <= 0 || segmentDurationSec > 30) throw new Error('Invalid segmentDurationSec');
-  let profiles = Array.isArray(raw.profiles) ? raw.profiles : [];
-  if (wantedProfiles?.length) profiles = profiles.filter((profile) => wantedProfiles.includes(profile.name));
-  profiles = profiles.map((profile) => ({
-    name: String(profile.name), bitrateMbps: Number(profile.bitrateMbps),
-    segments: Array.isArray(profile.segments) ? profile.segments.map(String) : [],
-  })).filter((profile) => profile.name && Number.isFinite(profile.bitrateMbps) && profile.bitrateMbps > 0);
-  if (!profiles.length) throw new Error('Streaming manifest has no usable profiles');
-  if (profiles.length > 8) throw new Error('Streaming manifest exceeds 8 profiles');
-  for (const profile of profiles) {
-    if (!profile.segments.length || profile.segments.length > 12) throw new Error(`Invalid segment count for ${profile.name}`);
-    if (profile.segments.some((item) => !item.startsWith('/'))) throw new Error(`Invalid segment path for ${profile.name}`);
-  }
-  profiles.sort((a, b) => a.bitrateMbps - b.bitrateMbps);
-  return { segmentDurationSec, profiles };
-}
+export function parseHlsManifest(text, baseUrl) {
+  const lines = String(text).split(/\r?\n/);
+  const variants = [];
+  const segments = [];
+  let pendingBandwidth = null;
+  let pendingDuration = null;
 
-async function discover(ip, target, options) {
-  const client = await createPageClient({ ...target, ip });
-  try {
-    const response = await client.request(options.manifestPath, {
-      captureBody: true, timeoutMs: options.timeoutMs, maxCaptureBytes: 1024 * 1024,
-    });
-    if (!response.ok || !response.body) throw new Error(`Streaming manifest failed: ${response.error || response.statusCode}`);
-    return normalizeManifest(JSON.parse(response.body.toString('utf8')), options.profiles);
-  } finally { client.close(); }
-}
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
 
-export async function probeStreaming(ip, target, options, logger = nullLogger) {
-  const log = logger.child({ component: 'streaming', ip });
-  const started = performance.now();
-  let client;
-  try {
-    log.debug('stream.manifest.start', { path: options.manifestPath });
-    const manifest = await discover(ip, target, options);
-    log.info('stream.manifest.ok', { profileCount: manifest.profiles.length, segmentDurationSec: manifest.segmentDurationSec });
-    client = await createPageClient({ ...target, ip });
-    const tested = [];
+    if (line.startsWith('#EXT-X-STREAM-INF')) {
+      const match = line.match(/BANDWIDTH=(\d+)/i);
+      pendingBandwidth = match ? Number(match[1]) : null;
+      continue;
+    }
+    if (line.startsWith('#EXTINF')) {
+      const match = line.match(/#EXTINF:\s*([\d.]+)/);
+      pendingDuration = match ? Number(match[1]) : null;
+      continue;
+    }
+    if (line.startsWith('#')) continue;
 
-    for (const profile of manifest.profiles) {
-      const profileLog = log.child({ profile: profile.name, bitrateMbps: profile.bitrateMbps });
-      profileLog.info('stream.profile.start', { segmentCount: profile.segments.length });
-      const segments = [];
-      for (let index = 0; index < profile.segments.length; index += 1) {
-        const segmentPath = profile.segments[index];
-        const response = await client.request(segmentPath, { timeoutMs: options.timeoutMs });
-        const downloadSec = response.totalMs / 1000;
-        const throughputMbps = response.ok && downloadSec > 0 ? response.bytes * 8 / downloadSec / 1_000_000 : 0;
-        const segment = {
-          index, path: segmentPath, ok: response.ok, statusCode: response.statusCode,
-          bytes: response.bytes, downloadSec, throughputMbps,
-          ttfbMs: response.ttfbMs, error: response.error,
-        };
-        segments.push(segment);
-        profileLog.debug('stream.segment.complete', segment);
-      }
-
-      const model = simulateBuffer(segments, {
-        segmentDurationSec: manifest.segmentDurationSec,
-        startupBufferSec: options.startupBufferSec,
-      });
-      const successRate = segments.filter((segment) => segment.ok).length / segments.length;
-      const throughputValues = segments.filter((segment) => segment.ok).map((segment) => segment.throughputMbps);
-      const throughputP10Mbps = quantile(throughputValues, 0.1) || 0;
-      const sustainable = successRate === 1 && model.playbackStarted && model.stallSec === 0
-        && throughputP10Mbps >= profile.bitrateMbps * options.safetyFactor;
-      const result = {
-        name: profile.name, bitrateMbps: profile.bitrateMbps, sustainable,
-        successRate: round(successRate * 100), throughputP10Mbps: round(throughputP10Mbps, 2),
-        startupDelayMs: round(model.startupDelaySec * 1000), stallMs: round(model.stallSec * 1000),
-        rebufferRatio: round(model.rebufferRatio, 4), segments,
-      };
-      tested.push(result);
-      profileLog.info('stream.profile.complete', {
-        sustainable, successRate: result.successRate, throughputP10Mbps: result.throughputP10Mbps,
-        startupDelayMs: result.startupDelayMs, stallMs: result.stallMs,
-      });
-      if (!sustainable && options.stopOnUnsustainable !== false) break;
+    let absolute;
+    try {
+      absolute = new URL(line, baseUrl).toString();
+    } catch {
+      continue;
     }
 
-    const best = tested.filter((profile) => profile.sustainable).at(-1) || null;
-    const allSegments = tested.flatMap((profile) => profile.segments);
-    const output = {
-      ok: allSegments.some((segment) => segment.ok), protocol: client.protocol, profiles: tested,
-      sustainable: best ? {
-        name: best.name, bitrateMbps: best.bitrateMbps,
-        startupDelayMs: best.startupDelayMs, throughputP10Mbps: best.throughputP10Mbps,
-      } : null,
-      segmentSuccessRate: allSegments.length ? round(allSegments.filter((segment) => segment.ok).length / allSegments.length * 100) : 0,
-      totalBytes: allSegments.reduce((sum, segment) => sum + (segment.bytes || 0), 0),
-      totalMs: performance.now() - started, error: null,
-    };
-    log.info('stream.probe.complete', {
-      durationMs: output.totalMs, sustainable: output.sustainable,
-      segmentSuccessRate: output.segmentSuccessRate, totalBytes: output.totalBytes,
-    });
-    return output;
-  } catch (error) {
-    log.error('stream.probe.error', { durationMs: performance.now() - started, error });
+    if (pendingBandwidth !== null) {
+      variants.push({ url: absolute, bandwidth: pendingBandwidth });
+      pendingBandwidth = null;
+    } else {
+      segments.push({ url: absolute, durationSec: pendingDuration ?? 4 });
+      pendingDuration = null;
+    }
+  }
+
+  return { variants, segments, isMaster: variants.length > 0 && segments.length === 0 };
+}
+
+// Simulates a player buffer to detect stalls under the measured throughput.
+export function simulateBuffer(segments, startupBufferSec = 4) {
+  let buffer = 0;
+  let stalls = 0;
+  let stalledSec = 0;
+  let startupDelaySec = 0;
+  let started = false;
+
+  for (const segment of segments) {
+    const downloadSec = segment.downloadMs / 1000;
+    if (!started) {
+      startupDelaySec += downloadSec;
+      buffer += segment.durationSec;
+      if (buffer >= startupBufferSec) started = true;
+      continue;
+    }
+    buffer -= downloadSec;
+    if (buffer < 0) {
+      stalls += 1;
+      stalledSec += Math.abs(buffer);
+      buffer = 0;
+    }
+    buffer += segment.durationSec;
+  }
+
+  const playbackSec = segments.reduce((total, item) => total + item.durationSec, 0) || 1;
+  return {
+    startupDelaySec: round(startupDelaySec, 3),
+    stalls,
+    rebufferRatio: round(stalledSec / playbackSec, 4),
+  };
+}
+
+export async function probeStreaming({
+  workload,
+  proxy = null,
+  timeoutMs = 25000,
+  maxSegments = 4,
+  startupBufferSec = 4,
+  safetyFactor = 1.25,
+  logger = null,
+}) {
+  const client = createHttpClient({ proxy, timeoutMs });
+
+  try {
+    let segmentList = [];
+
+    if (Array.isArray(workload.segmentUrls) && workload.segmentUrls.length > 0) {
+      segmentList = workload.segmentUrls.map((url) => ({ url, durationSec: workload.segmentDurationSec || 4 }));
+    } else if (workload.manifestUrl) {
+      const manifest = await client.request(workload.manifestUrl, { captureBody: true, maxBytes: 512 * 1024 });
+      if (!manifest.ok) {
+        return emptyResult(workload, manifest.error || 'manifest_failed');
+      }
+      let parsed = parseHlsManifest(manifest.body.toString('utf8'), workload.manifestUrl);
+
+      if (parsed.isMaster) {
+        const chosen = parsed.variants.sort((a, b) => a.bandwidth - b.bandwidth)[
+          Math.min(1, parsed.variants.length - 1)
+        ];
+        const media = await client.request(chosen.url, { captureBody: true, maxBytes: 512 * 1024 });
+        if (!media.ok) return emptyResult(workload, media.error || 'variant_failed');
+        parsed = parseHlsManifest(media.body.toString('utf8'), chosen.url);
+      }
+      segmentList = parsed.segments;
+    }
+
+    if (segmentList.length === 0) return emptyResult(workload, 'no_segments');
+
+    const selected = segmentList.slice(0, maxSegments);
+    const measured = [];
+
+    for (const segment of selected) {
+      const result = await client.request(segment.url, { maxBytes: 12 * 1024 * 1024 });
+      logger?.debug('streaming.segment', { ok: result.ok, bytes: result.bytes, totalMs: result.totalMs });
+      if (!result.ok || result.bytes === 0) {
+        measured.push({ ...segment, ok: false, downloadMs: result.totalMs || 0, bytes: 0, mbps: null });
+        continue;
+      }
+      const seconds = Math.max(result.totalMs, 1) / 1000;
+      measured.push({
+        ...segment,
+        ok: true,
+        downloadMs: result.totalMs,
+        ttfbMs: result.ttfbMs,
+        bytes: result.bytes,
+        mbps: round((result.bytes * 8) / seconds / 1e6, 3),
+      });
+    }
+
+    const successes = measured.filter((item) => item.ok);
+    const successRate = measured.length === 0 ? 0 : successes.length / measured.length;
+    const throughputs = successes.map((item) => item.mbps);
+    const buffer = simulateBuffer(measured, startupBufferSec);
+    const sustainableMbps = throughputs.length > 0 ? round(percentile(throughputs, 10) / safetyFactor, 3) : null;
+
+    const score = weightedScore([
+      { score: successRate, weight: 35 },
+      { score: scoreLowerBetter(buffer.startupDelaySec, 0.8, 8), weight: 15 },
+      { score: scoreLowerBetter(buffer.rebufferRatio, 0.005, 0.25), weight: 30 },
+      { score: scoreHigherBetter(sustainableMbps ?? NaN, 6, 0.4), weight: 20 },
+    ]);
+
     return {
-      ok: false, profiles: [], sustainable: null, segmentSuccessRate: 0,
-      totalBytes: 0, totalMs: performance.now() - started, error: error.code || error.message,
+      workload: workload.name,
+      segments: measured.length,
+      successRate: round(successRate, 3),
+      medianMbps: round(median(throughputs), 3),
+      p10Mbps: round(percentile(throughputs, 10), 3),
+      sustainableMbps,
+      quality: qualityLabel(sustainableMbps),
+      startupDelaySec: buffer.startupDelaySec,
+      stalls: buffer.stalls,
+      rebufferRatio: buffer.rebufferRatio,
+      bytes: measured.reduce((total, item) => total + (item.bytes || 0), 0),
+      score,
+      error: null,
+      detail: measured,
     };
-  } finally { client?.close(); }
+  } finally {
+    client.close();
+  }
+}
+
+function qualityLabel(mbps) {
+  if (!Number.isFinite(mbps)) return null;
+  if (mbps >= 15) return '4K';
+  if (mbps >= 6) return '1080p';
+  if (mbps >= 3) return '720p';
+  if (mbps >= 1) return '480p';
+  return '360p';
+}
+
+function emptyResult(workload, error) {
+  return {
+    workload: workload.name,
+    segments: 0,
+    successRate: 0,
+    medianMbps: null,
+    p10Mbps: null,
+    sustainableMbps: null,
+    quality: null,
+    startupDelaySec: null,
+    stalls: 0,
+    rebufferRatio: null,
+    bytes: 0,
+    score: null,
+    error,
+    detail: [],
+  };
 }

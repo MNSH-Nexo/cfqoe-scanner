@@ -1,39 +1,93 @@
 {
+  "$comment": "0.8.0 catalog. Two rules: (1) a workload used to judge a Cloudflare IP must actually be served by Cloudflare, otherwise it measures somebody else's CDN; (2) a streaming ladder can never prove more quality than its own top rendition, so every entry declares ladderMaxMbps and the probe caps the reported quality by it.",
   "browsing": [
     {
-      "name": "wikipedia",
-      "description": "Wikipedia main page, mixed static assets and third-party style delivery",
-      "pageUrl": "https://en.wikipedia.org/wiki/Main_Page"
+      "name": "cloudflare-docs",
+      "description": "Cloudflare developer docs: served by Cloudflare, many small same-origin assets, stable markup - the closest thing to a normal content page on this edge",
+      "pageUrl": "https://developers.cloudflare.com/",
+      "cdn": "cloudflare",
+      "profile": "many-small-assets"
     },
     {
-      "name": "cloudflare-docs",
-      "description": "Cloudflare developer documentation page with sub-resources",
-      "pageUrl": "https://developers.cloudflare.com/"
+      "name": "cloudflare-blog",
+      "description": "Cloudflare blog home: image-heavy page on Cloudflare, exercises larger objects and image resizing on the same edge",
+      "pageUrl": "https://blog.cloudflare.com/",
+      "cdn": "cloudflare",
+      "profile": "image-heavy"
     },
     {
       "name": "cloudflare-speed",
-      "description": "Cloudflare speed landing page",
-      "pageUrl": "https://speed.cloudflare.com/"
+      "description": "Cloudflare speed landing page, same origin as the load endpoints",
+      "pageUrl": "https://speed.cloudflare.com/",
+      "cdn": "cloudflare",
+      "profile": "light"
+    },
+    {
+      "name": "cdnjs",
+      "description": "cdnjs library index on cdnjs.cloudflare.com: pure static asset delivery from Cloudflare, no application server in the path",
+      "pageUrl": "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js",
+      "cdn": "cloudflare",
+      "profile": "static-asset"
+    },
+    {
+      "name": "wikipedia",
+      "description": "CONTROL ONLY (not Cloudflare): use to compare the tunnel itself against the Cloudflare edge, never to rank Cloudflare IPs",
+      "pageUrl": "https://en.wikipedia.org/wiki/Main_Page",
+      "cdn": "other",
+      "control": true,
+      "profile": "mixed"
     }
   ],
   "streaming": [
     {
-      "name": "apple-bipbop",
-      "description": "Apple BipBop reference HLS stream, closer to real public playback than synthetic lab pages",
-      "manifestUrl": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8",
-      "segmentDurationSec": 10
+      "name": "apple-advanced-hevc",
+      "description": "Apple advanced reference stream (fMP4, HEVC + H.264 ladder, byte-range init maps). Real multi-rendition ABR ladder up to 1080p, which is what ordinary playback looks like",
+      "manifestUrl": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8",
+      "fallbackManifestUrls": [
+        "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
+        "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+      ],
+      "ladderMaxMbps": 9.5,
+      "segmentDurationSec": 6,
+      "cdn": "other"
     },
     {
-      "name": "bitmovin-sintel",
-      "description": "Bitmovin public HLS demo stream delivered over a mainstream video platform CDN",
-      "manifestUrl": "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
-      "segmentDurationSec": 10
+      "name": "apple-4k-dolby",
+      "description": "Apple advanced 4K Dolby Vision / Atmos reference ladder. The only default workload whose top rendition is high enough to honestly demonstrate 4K capability",
+      "manifestUrl": "https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/main.m3u8",
+      "fallbackManifestUrls": [
+        "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8"
+      ],
+      "ladderMaxMbps": 25,
+      "segmentDurationSec": 6,
+      "cdn": "other"
     },
     {
       "name": "mux-test-hls",
-      "description": "Mux public HLS test stream",
+      "description": "Mux public HLS test stream, widely used reference ladder up to 1080p",
       "manifestUrl": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-      "segmentDurationSec": 10
+      "ladderMaxMbps": 6,
+      "segmentDurationSec": 10,
+      "cdn": "other"
+    },
+    {
+      "name": "bitmovin-sintel",
+      "description": "Bitmovin Sintel demo ladder on their current CDN host",
+      "manifestUrl": "https://cdn.bitmovin.com/content/assets/sintel/hls/playlist.m3u8",
+      "fallbackManifestUrls": [
+        "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+      ],
+      "ladderMaxMbps": 4.5,
+      "segmentDurationSec": 10,
+      "cdn": "other"
+    },
+    {
+      "name": "akamai-bbb-low",
+      "description": "Low-bitrate Big Buck Bunny ladder (max ~1.5 Mbps): useful on very constrained paths where richer ladders never start playback",
+      "manifestUrl": "https://multiplatform-f.akamaihd.net/i/multi/will/bunny/big_buck_bunny_,640x360_400,640x360_700,640x360_1000,950x540_1500,.mp4.csmil/master.m3u8",
+      "ladderMaxMbps": 1.5,
+      "segmentDurationSec": 10,
+      "cdn": "other"
     }
   ]
 }

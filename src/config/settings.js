@@ -3,13 +3,14 @@ import path from 'node:path';
 
 export function createDefaultSettings(platform = process.platform) {
   const android = platform === 'android';
+  const eligibilityConcurrency = android ? 6 : 12;
   return {
     version: 1,
     scan: {
       perRange: 3,
       maxCandidates: 120,
       rounds: 3,
-      concurrency: android ? 6 : 12,
+      concurrency: eligibilityConcurrency,
       timeoutMs: 6000,
       minimumSuccessRate: 0.6,
       seed: 404,
@@ -38,6 +39,9 @@ export function createDefaultSettings(platform = process.platform) {
       timeoutMs: 25000,
     },
     hard: {
+      concurrency: eligibilityConcurrency,
+      screeningRounds: 1,
+      recheckTop: android ? 12 : 20,
       saveEvery: android ? 10 : 25,
       liveTop: 30,
       finalTop: 200,

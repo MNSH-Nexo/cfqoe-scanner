@@ -14,7 +14,7 @@ import { runHardScan, hasHardScanState } from '../hard-scan.js';
 const MENU = `
   ${color.bold('1')}. Quick Scan            ${color.dim('fresh random sample, small and fast')}
   ${color.bold('2')}. Full Scan             ${color.dim('fresh wider sample and more rounds')}
-  ${color.bold('3')}. Hard Deep Scan        ${color.dim('one IP per range per pass, resumable')}
+  ${color.bold('3')}. Hard Deep Scan        ${color.dim('parallel one-IP-per-range sweep, resumable')}
   ${color.bold('4')}. Resume Hard Scan      ${color.dim('continue the last deep sweep')}
   ${color.bold('5')}. VLESS Configuration   ${color.dim('import, inspect or remove your config')}
   ${color.bold('6')}. Workload Settings     ${color.dim('choose or add browsing and streaming targets')}
@@ -146,7 +146,8 @@ async function startHard({ rl, layout, settings }, resume) {
   const logger = createLogger({ level: settings.logging.level, directory: layout.logs });
   rl.pause();
   console.log(`\n  ${color.bold(resume ? 'Resuming hard scan' : 'Hard deep scan')} started. Run id: ${logger.runId}`);
-  console.log(`  ${color.dim('New scans take one IP from every range per pass. Press Q or Ctrl+C to stop safely.')}\n`);
+  console.log(`  ${color.dim(`Parallel sweep: ${settings.hard.concurrency} IPs at once, ${settings.hard.screeningRounds} fast screening round(s).`)}`);
+  console.log(`  ${color.dim('Selection still takes one IP from every range per pass. Press Q or Ctrl+C to stop safely.')}\n`);
 
   try {
     const result = await runHardScan({
@@ -323,6 +324,9 @@ async function advancedSettings({ rl, layout, settings }) {
     { label: 'Tunnel rounds', group: 'tunnel', field: 'rounds' },
     { label: 'Streaming segments', group: 'streaming', field: 'maxSegments' },
     { label: 'Browsing asset limit', group: 'browsing', field: 'assetLimit' },
+    { label: 'Hard concurrent IPs', group: 'hard', field: 'concurrency' },
+    { label: 'Hard screening rounds', group: 'hard', field: 'screeningRounds' },
+    { label: 'Hard finalist recheck count', group: 'hard', field: 'recheckTop' },
     { label: 'Hard-save every N IPs', group: 'hard', field: 'saveEvery' },
     { label: 'Hard live top count', group: 'hard', field: 'liveTop' },
     { label: 'Hard final top count', group: 'hard', field: 'finalTop' },

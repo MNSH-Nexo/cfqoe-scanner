@@ -4,6 +4,7 @@ import readline from 'node:readline';
 import { parseVlessUri, describeVless, assertWebsocketCapable } from './config/vless.js';
 import { parseRangeList } from './candidate/ipv4.js';
 import { buildRangePlan, nextRoundRobinCandidate, nextLegacyCandidate } from './candidate/hard-order.js';
+import { collectCandidateBatch, runEligibilityBatch } from './hard-scheduler.js';
 import { probeWebsocket } from './probe/websocket.js';
 import { startXray } from './xray/manager.js';
 import { locateXray } from './platform/xray.js';
@@ -13,6 +14,17 @@ import { probeStreaming } from './streaming/probe.js';
 import { applyTunnelResults, buildEligibilitySummary, rankCandidates, renderTopList, REPORT_SCHEMA } from './report.js';
 
 const HARD_STATE_VERSION = 2;
+
+function positiveInteger(value, fallback = 1, maximum = 64) {
+  const numeric = Math.floor(Number(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  return Math.min(numeric, maximum);
+}
+
+function successRate(observations) {
+  if (observations.length === 0) return 0;
+  return observations.filter((item) => item.ok).length / observations.length;
+}
 
 function compareEligibility(a, b) {
   if (b.eligibility.successRate !== a.eligibility.successRate) {
@@ -87,6 +99,7 @@ function writeSnapshot(state) {
     runId: state.runId,
     status: state.status,
     traversal: legacy ? 'legacy-range-sequential' : 'range-round-robin',
+    execution: 'parallel-batched',
     startedAt: state.startedAt,
     updatedAt: new Date().toISOString(),
     progress: {
@@ -112,6 +125,7 @@ function createState({ layout, runId, settings, target, total, rangesCount }) {
     runId,
     mode: 'hard',
     traversal: 'range-round-robin',
+    execution: 'parallel-batched',
     status: 'in_progress',
     startedAt: new Date().toISOString(),
     target,
@@ -263,6 +277,48 @@ async function loadTopEligibility(filePath, limit) {
   return top;
 }
 
+async function recheckFinalists({ candidates, settings, vless, logger, onProgress }) {
+  const limit = Math.min(candidates.length, positiveInteger(settings.hard.recheckTop, 20, 200));
+  if (limit === 0) return candidates;
+  const selected = candidates.slice(0, limit).map((item) => ({ ip: item.ip, range: item.range }));
+  const concurrency = positiveInteger(settings.hard.concurrency, settings.scan.concurrency);
+  let verifiedEligible = 0;
+  let verifiedFailed = 0;
+
+  logger.info('hard.recheck.start', { candidates: selected.length, rounds: settings.scan.rounds, concurrency });
+  const checked = await runEligibilityBatch({
+    candidates: selected,
+    rounds: settings.scan.rounds,
+    concurrency,
+    minimumSuccessRate: settings.scan.minimumSuccessRate,
+    task: async (candidate) => probeWebsocket({
+      ip: candidate.ip,
+      vless,
+      timeoutMs: settings.scan.timeoutMs,
+    }),
+    onCandidateDone: ({ candidate, observations, finished, total }) => {
+      if (successRate(observations) >= settings.scan.minimumSuccessRate) verifiedEligible += 1;
+      else verifiedFailed += 1;
+      onProgress({
+        phase: 'hard-recheck',
+        completed: finished,
+        total,
+        eligible: verifiedEligible,
+        failed: verifiedFailed,
+        currentRange: candidate.range,
+        note: 'verifying finalists',
+      });
+    },
+  });
+
+  const replacements = new Map(checked.map(({ candidate, observations }) => [
+    candidate.ip,
+    buildEligibilitySummary({ ip: candidate.ip, range: candidate.range, eligibility: observations }),
+  ]));
+  logger.info('hard.recheck.complete', { candidates: checked.length, eligible: verifiedEligible, failed: verifiedFailed });
+  return candidates.map((item) => replacements.get(item.ip) || item).sort(compareEligibility);
+}
+
 function writeHardReport({ layout, state, target, settings, candidates, xrayInfo, canceled }) {
   const ranked = rankCandidates(candidates);
   const report = {
@@ -271,6 +327,7 @@ function writeHardReport({ layout, state, target, settings, candidates, xrayInfo
     version: '0.5.0',
     mode: 'hard',
     traversal: isLegacyState(state) ? 'legacy-range-sequential' : 'range-round-robin',
+    execution: 'parallel-batched',
     runId: state.runId,
     startedAt: state.startedAt,
     finishedAt: new Date().toISOString(),
@@ -324,6 +381,7 @@ export async function runHardScan({
     state = loadState(layout);
     state.settings = settings;
     state.status = 'in_progress';
+    state.execution = 'parallel-batched';
     state.traversal = isLegacyState(state) ? 'legacy-range-sequential' : 'range-round-robin';
   } else {
     state = createState({ layout, runId, settings, target, total: plan.total, rangesCount: ranges.length });
@@ -337,59 +395,80 @@ export async function runHardScan({
     }
   }
 
+  const concurrency = positiveInteger(settings.hard.concurrency, settings.scan.concurrency);
+  const screeningRounds = positiveInteger(settings.hard.screeningRounds, 1, 5);
   let cancelRequested = false;
   const detachCancel = attachCancelControls(() => { cancelRequested = true; });
   const legacy = isLegacyState(state);
+  const nextCandidate = legacy ? nextLegacyCandidate : nextRoundRobinCandidate;
   logger.info('hard.start', {
     runId: state.runId,
     target,
     totalCandidates: plan.total,
     ranges: ranges.length,
     traversal: legacy ? 'legacy-range-sequential' : 'range-round-robin',
+    execution: 'parallel-batched',
+    concurrency,
+    screeningRounds,
     resume,
   });
 
   let sinceSave = 0;
   try {
-    while (true) {
-      const candidate = legacy
-        ? nextLegacyCandidate(plan, state.cursor)
-        : nextRoundRobinCandidate(plan, state.cursor);
-      if (!candidate || cancelRequested) break;
+    while (!cancelRequested) {
+      const batch = collectCandidateBatch({
+        plan,
+        cursor: state.cursor,
+        limit: concurrency,
+        nextCandidate,
+      });
+      if (batch.length === 0) break;
 
-      const observations = [];
-      for (let round = 0; round < settings.scan.rounds; round += 1) {
-        observations.push(await probeWebsocket({
+      let batchEligible = 0;
+      let batchFailed = 0;
+      const checked = await runEligibilityBatch({
+        candidates: batch,
+        rounds: screeningRounds,
+        concurrency,
+        minimumSuccessRate: settings.scan.minimumSuccessRate,
+        task: async (candidate) => probeWebsocket({
           ip: candidate.ip,
           vless,
           timeoutMs: settings.scan.timeoutMs,
-        }));
-        if (cancelRequested) break;
+        }),
+        onCandidateDone: ({ candidate, observations, finished }) => {
+          if (successRate(observations) >= settings.scan.minimumSuccessRate) batchEligible += 1;
+          else batchFailed += 1;
+          onProgress({
+            phase: 'hard-scan',
+            completed: state.counts.tested + finished,
+            total: state.total,
+            eligible: state.counts.eligible + batchEligible,
+            failed: state.counts.failed + batchFailed,
+            currentRange: candidate.range,
+            note: legacy
+              ? `legacy parallel resume x${concurrency}; Q or Ctrl+C to stop safely`
+              : `parallel x${concurrency}; range pass ${candidate.hostIndex + 1}; Q or Ctrl+C to stop safely`,
+          });
+        },
+      });
+
+      for (const { candidate, observations } of checked) {
+        const summary = buildEligibilitySummary({
+          ip: candidate.ip,
+          range: candidate.range,
+          eligibility: observations,
+        });
+        appendEligibility(state.files.eligibilityFile, summary);
+        state.cursor = candidate.nextCursor;
+        state.counts.tested += 1;
+        if (summary.eligibility.successRate >= settings.scan.minimumSuccessRate) state.counts.eligible += 1;
+        else state.counts.failed += 1;
+        state.topEligibility = rememberTop(state.topEligibility, summary, settings.hard.liveTop);
+        logger.debug('hard.eligibility', { ip: candidate.ip, range: candidate.range, eligibility: summary.eligibility });
       }
 
-      const summary = buildEligibilitySummary({
-        ip: candidate.ip,
-        range: candidate.range,
-        eligibility: observations,
-      });
-      appendEligibility(state.files.eligibilityFile, summary);
-      state.cursor = candidate.nextCursor;
-      state.counts.tested += 1;
-      if (summary.eligibility.successRate >= settings.scan.minimumSuccessRate) state.counts.eligible += 1;
-      else state.counts.failed += 1;
-      state.topEligibility = rememberTop(state.topEligibility, summary, settings.hard.liveTop);
-      sinceSave += 1;
-
-      onProgress({
-        phase: 'hard-scan',
-        completed: state.counts.tested,
-        total: state.total,
-        eligible: state.counts.eligible,
-        failed: state.counts.failed,
-        currentRange: candidate.range,
-        note: legacy ? 'legacy resume; Q or Ctrl+C to stop safely' : `range pass ${candidate.hostIndex + 1}; Q or Ctrl+C to stop safely`,
-      });
-
+      sinceSave += checked.length;
       if (sinceSave >= settings.hard.saveEvery || cancelRequested) {
         state.status = cancelRequested ? 'paused' : 'in_progress';
         persistState(layout, state);
@@ -405,7 +484,14 @@ export async function runHardScan({
     detachCancel();
   }
 
-  const topEligibility = await loadTopEligibility(state.files.eligibilityFile, settings.hard.finalTop);
+  const screenedTop = await loadTopEligibility(state.files.eligibilityFile, settings.hard.finalTop);
+  const topEligibility = await recheckFinalists({
+    candidates: screenedTop,
+    settings,
+    vless,
+    logger,
+    onProgress,
+  });
   const { xrayInfo, tunnelResults } = await runTunnelStage({
     candidates: topEligibility,
     settings,
@@ -434,6 +520,7 @@ export async function runHardScan({
     tested: state.counts.tested,
     eligible: state.counts.eligible,
     traversal: state.traversal,
+    execution: state.execution,
     report: result.jsonPath,
   });
   return result;

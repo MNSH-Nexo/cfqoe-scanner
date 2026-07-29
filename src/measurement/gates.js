@@ -1,9 +1,17 @@
 // Absolute quality gates.
 //
 // 0.6.0 ranked candidates only relative to each other, so an IP could score 91
-// while being unusable in practice. Gates add absolute, human-meaningful limits:
-// a candidate that fails a gate can never be presented as a good IP, no matter
-// how it compares to the rest of the run.
+// while being unusable in practice. Gates add absolute, human-meaningful limits.
+//
+// 0.8.0 fixes the opposite failure mode: gates that were absolute where the
+// physics is relative. On a tunnel to Frankfurt the base RTT is 150-300 ms no
+// matter how good the edge is, so an absolute "RTT under load < 250 ms" gate
+// failed every single candidate and flattened the whole report to one score.
+// What matters is
+//   * how many round trips per minute the path delivers WHILE loaded (RPM, as
+//     defined by the IETF responsiveness work), and
+//   * how much delay the path ADDS under load compared to its own idle baseline
+//     (bufferbloat), not the geographic baseline itself.
 
 export const GATE_DEFINITIONS = [
 	{
@@ -11,8 +19,8 @@ export const GATE_DEFINITIONS = [
 		label: 'Sustained downlink',
 		unit: 'Mbps',
 		direction: 'higher',
-		warn: 6,
-		fail: 1.5,
+		warn: 8,
+		fail: 2,
 		reason: 'not enough sustained bandwidth for video or heavy pages',
 	},
 	{
@@ -25,30 +33,39 @@ export const GATE_DEFINITIONS = [
 		reason: 'throughput collapses after the first seconds (traffic shaping)',
 	},
 	{
-		name: 'loadedRttMs',
-		label: 'RTT under load',
+		name: 'rpm',
+		label: 'Responsiveness under load',
+		unit: 'rpm',
+		direction: 'higher',
+		warn: 300,
+		fail: 100,
+		reason: 'too few round trips per minute under load, so pages crawl',
+	},
+	{
+		name: 'rttIncreaseMs',
+		label: 'Added delay under load',
 		unit: 'ms',
 		direction: 'lower',
-		warn: 250,
-		fail: 600,
-		reason: 'round trips are too slow while the link is busy',
+		warn: 120,
+		fail: 400,
+		reason: 'the path adds a lot of delay as soon as it is busy (bufferbloat)',
 	},
 	{
 		name: 'rttInflation',
 		label: 'RTT inflation under load',
 		unit: 'x',
 		direction: 'lower',
-		warn: 1.6,
-		fail: 3,
-		reason: 'latency explodes as soon as traffic starts (bufferbloat)',
+		warn: 2,
+		fail: 4,
+		reason: 'latency multiplies as soon as traffic starts',
 	},
 	{
 		name: 'jitterMs',
 		label: 'Jitter (p95 - p50)',
 		unit: 'ms',
 		direction: 'lower',
-		warn: 60,
-		fail: 150,
+		warn: 80,
+		fail: 250,
 		reason: 'latency is unstable, so interactive traffic stalls',
 	},
 	{
@@ -74,8 +91,8 @@ export const GATE_DEFINITIONS = [
 		label: 'Fresh connection setup p90',
 		unit: 'ms',
 		direction: 'lower',
-		warn: 800,
-		fail: 2000,
+		warn: 1200,
+		fail: 3000,
 		reason: 'opening new connections is too slow, so pages feel dead',
 	},
 	{
@@ -88,6 +105,54 @@ export const GATE_DEFINITIONS = [
 		reason: 'uplink is too weak to carry requests and handshakes',
 	},
 ]
+
+// Named threshold profiles.
+//
+// `balanced` is the shipped default and is written for a real tunnel over a
+// long, congested path. `strict` is for picking the best of an already good
+// set (data-centre or low-RTT paths). `tolerant` is for very constrained links
+// where the question is only "is this usable at all".
+export const GATE_PROFILES = {
+	balanced: {},
+	strict: {
+		sustainedMbps: { warn: 20, fail: 6 },
+		rpm: { warn: 600, fail: 200 },
+		rttIncreaseMs: { warn: 60, fail: 200 },
+		rttInflation: { warn: 1.5, fail: 2.5 },
+		jitterMs: { warn: 50, fail: 120 },
+		freshConnectionMs: { warn: 700, fail: 1800 },
+		uplinkMbps: { warn: 3, fail: 1 },
+	},
+	tolerant: {
+		sustainedMbps: { warn: 4, fail: 1 },
+		shapingRatio: { warn: 0.55, fail: 0.3 },
+		rpm: { warn: 150, fail: 60 },
+		rttIncreaseMs: { warn: 250, fail: 800 },
+		rttInflation: { warn: 3, fail: 6 },
+		jitterMs: { warn: 150, fail: 400 },
+		fanoutSuccess: { warn: 0.9, fail: 0.75 },
+		freshConnectionMs: { warn: 2000, fail: 5000 },
+		uplinkMbps: { warn: 0.5, fail: 0.1 },
+	},
+}
+
+export const DEFAULT_GATE_PROFILE = 'balanced'
+
+/**
+ * Merge a named profile with explicit per-gate overrides.
+ * Explicit overrides always win, so a user setting is never silently replaced.
+ */
+export function resolveGateOverrides(profile = DEFAULT_GATE_PROFILE, overrides = {}) {
+	const base = GATE_PROFILES[profile] || GATE_PROFILES[DEFAULT_GATE_PROFILE]
+	const merged = {}
+	for (const definition of GATE_DEFINITIONS) {
+		const fromProfile = base[definition.name] || {}
+		const fromUser = (overrides && overrides[definition.name]) || {}
+		const limits = { ...fromProfile, ...fromUser }
+		if (Object.keys(limits).length > 0) merged[definition.name] = limits
+	}
+	return merged
+}
 
 export const SCORE_CAPS = { pass: 100, warn: 75, fail: 45 }
 
@@ -117,10 +182,11 @@ function statusFor(definition, value, limits) {
  * Evaluate absolute gates for one candidate.
  *
  * @param {Record<string, number|null|undefined>} metrics measured values keyed by gate name
- * @param {{ overrides?: Record<string, {warn?: number, fail?: number}>, requireAll?: boolean }} [options]
+ * @param {{ overrides?: Record<string, {warn?: number, fail?: number}>, profile?: string, requireAll?: boolean }} [options]
  */
 export function evaluateGates(metrics = {}, options = {}) {
-	const { overrides, requireAll = true } = options
+	const { overrides, profile, requireAll = true } = options
+	const effective = profile ? resolveGateOverrides(profile, overrides) : overrides
 	const checks = []
 	const failures = []
 	const warnings = []
@@ -128,7 +194,7 @@ export function evaluateGates(metrics = {}, options = {}) {
 	const reasons = []
 
 	for (const definition of GATE_DEFINITIONS) {
-		const limits = limitsFor(definition, overrides)
+		const limits = limitsFor(definition, effective)
 		const raw = metrics[definition.name]
 		const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
 		const status = statusFor(definition, value, limits)
@@ -158,7 +224,19 @@ export function evaluateGates(metrics = {}, options = {}) {
 
 	const scoreCap = status === 'unknown' ? SCORE_CAPS.warn : SCORE_CAPS[status]
 
-	return { status, scoreCap, checks, failures, warnings, missing, reasons }
+	return {
+		status,
+		scoreCap,
+		profile: profile || DEFAULT_GATE_PROFILE,
+		checks,
+		failures,
+		warnings,
+		missing,
+		reasons,
+		// The single most important reason a candidate is not better than it is.
+		// Reports print this so a table of identical scores is never a dead end.
+		limiting: failures[0] || warnings[0] || missing[0] || null,
+	}
 }
 
 /**
@@ -180,6 +258,7 @@ export function buildVerdict({ gateResult, cappedScore, streamingScore, confiden
 		return {
 			label: 'unusable',
 			summary: 'Fails at least one absolute quality gate.',
+			limiting: (gateResult && gateResult.limiting) || null,
 			reasons: (gateResult && gateResult.reasons) || [],
 		}
 	}
@@ -187,6 +266,7 @@ export function buildVerdict({ gateResult, cappedScore, streamingScore, confiden
 		return {
 			label: 'unverified',
 			summary: 'Some load stages were not measured, so the score is provisional.',
+			limiting: (gateResult && gateResult.limiting) || null,
 			reasons: ((gateResult && gateResult.missing) || []).map((name) => `${name} was not measured`),
 		}
 	}
@@ -197,6 +277,7 @@ export function buildVerdict({ gateResult, cappedScore, streamingScore, confiden
 			summary: weakStreaming
 				? 'Acceptable for pages, not reliable for video.'
 				: 'Usable, but at least one metric is close to its limit.',
+			limiting: (gateResult && gateResult.limiting) || null,
 			reasons: (gateResult && gateResult.warnings) || [],
 		}
 	}
@@ -207,6 +288,7 @@ export function buildVerdict({ gateResult, cappedScore, streamingScore, confiden
 		summary: trusted
 			? 'Passes every absolute gate with a stable measurement.'
 			: 'Passes every absolute gate, but needs more samples to be trusted.',
+		limiting: null,
 		reasons: [],
 	}
 }

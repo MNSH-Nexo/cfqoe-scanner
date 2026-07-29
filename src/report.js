@@ -3,12 +3,14 @@ import path from 'node:path';
 import { median, percentile, mad, weightedScore, scoreHigherBetter, scoreLowerBetter, round } from './stats.js';
 import { wilsonInterval, confidenceLabel, summarizePops } from './measurement/confidence.js';
 import { summarizeProbeErrors } from './probe/errors.js';
-import { evaluateGates, capScore, buildVerdict } from './measurement/gates.js';
+import { evaluateGates, capScore, buildVerdict, GATE_DEFINITIONS } from './measurement/gates.js';
 
-export const REPORT_SCHEMA = 7;
-export const GENERATOR_VERSION = '0.7.0';
+export const REPORT_SCHEMA = 8;
+export const GENERATOR_VERSION = '0.8.0';
 
 export const VERDICT_RANK = { recommended: 0, good: 1, usable: 2, 'browsing-only': 3, unverified: 4, unusable: 5 };
+
+const GATE_LABELS = new Map(GATE_DEFINITIONS.map((definition) => [definition.name, definition.label]));
 
 export function buildEligibilitySummary({ ip, range, eligibility, temporalBlocks = 1 }) {
   const successful = eligibility.filter((item) => item.ok);
@@ -54,6 +56,8 @@ function summarizeStreaming(items) {
     estimator: items.find((item) => item.estimator)?.estimator || null,
     sampleCount: items.reduce((total, item) => total + (item.sampleCount || item.segments || 0), 0),
     quality: items.find((item) => item.quality)?.quality || null,
+    ladderMaxMbps: items.find((item) => typeof item.ladderMaxMbps === 'number')?.ladderMaxMbps ?? null,
+    ladderLimited: items.some((item) => item.ladderLimited),
     startupDelaySec: round(median(items.map((item) => item.startupDelaySec)), 3),
     rebufferRatio: round(median(items.map((item) => item.rebufferRatio)), 4),
     bytes: items.reduce((total, item) => total + (item.bytes || 0), 0),
@@ -64,10 +68,6 @@ function medianOf(items, pick) {
   return median(items.map(pick).filter((value) => typeof value === 'number' && Number.isFinite(value)));
 }
 
-/**
- * Summarise the real-load stage: sustained transfer, decay over time, latency
- * under load, browser-like fan-out and uplink.
- */
 export function summarizeLoad(items) {
   const usable = (items || []).filter((item) => item && item.ok);
   if (usable.length === 0) return null;
@@ -76,37 +76,41 @@ export function summarizeLoad(items) {
     0,
   );
   const metrics = {
+    flows: usable.find((item) => item.downlink?.flows)?.downlink?.flows ?? null,
     sustainedMbps: round(medianOf(usable, (item) => item.downlink?.sustainedMbps), 2),
+    perFlowMbps: round(medianOf(usable, (item) => item.downlink?.perFlowMbps), 2),
     peakMbps: round(medianOf(usable, (item) => item.downlink?.peakMbps), 2),
     earlyMbps: round(medianOf(usable, (item) => item.downlink?.earlyMbps), 2),
     lateMbps: round(medianOf(usable, (item) => item.downlink?.lateMbps), 2),
     shapingRatio: round(medianOf(usable, (item) => item.downlink?.shapingRatio), 3),
     idleRttMs: round(medianOf(usable, (item) => item.latency?.idleRttMs), 2),
     loadedRttMs: round(medianOf(usable, (item) => item.latency?.loadedRttMs), 2),
+    rttIncreaseMs: round(medianOf(usable, (item) => item.latency?.rttIncreaseMs), 2),
     rttInflation: round(medianOf(usable, (item) => item.latency?.rttInflation), 2),
+    rpm: round(medianOf(usable, (item) => item.latency?.rpm), 1),
+    idleRpm: round(medianOf(usable, (item) => item.latency?.idleRpm), 1),
     jitterMs: round(medianOf(usable, (item) => item.latency?.jitterMs), 2),
     lossRate: round(medianOf(usable, (item) => item.latency?.lossRate), 4),
     fanoutSuccess: round(medianOf(usable, (item) => item.fanout?.fanoutSuccess), 4),
     freshConnectionMs: round(medianOf(usable, (item) => item.fanout?.freshConnectionMs), 2),
     uplinkMbps: round(medianOf(usable, (item) => item.uplink?.sustainedMbps), 2),
+    controlMbps: round(medianOf(usable, (item) => item.control?.controlMbps), 2),
+    edgeShare: round(medianOf(usable, (item) => item.control?.edgeShare), 3),
+    bottleneck: usable.find((item) => item.control?.bottleneck)?.control?.bottleneck || null,
   };
   return { observations: usable.length, bytes, ...metrics };
 }
 
-/**
- * Score the real-load stage on absolute curves.
- * These curves are intentionally strict: 25 Mbps sustained with sub-100 ms
- * loaded latency is what a "100" means.
- */
 export function scoreLoad(load) {
   if (!load) return null;
   return weightedScore([
-    { name: 'sustained', score: scoreHigherBetter(load.sustainedMbps, 25, 1), weight: 30 },
+    { name: 'sustained', score: scoreHigherBetter(load.sustainedMbps, 25, 1), weight: 25 },
     { name: 'shaping', score: scoreHigherBetter(load.shapingRatio, 0.95, 0.3), weight: 15 },
-    { name: 'loadedRtt', score: scoreLowerBetter(load.loadedRttMs, 80, 800), weight: 20 },
-    { name: 'jitter', score: scoreLowerBetter(load.jitterMs, 20, 200), weight: 8 },
+    { name: 'responsiveness', score: scoreHigherBetter(load.rpm, 900, 60), weight: 20 },
+    { name: 'addedDelay', score: scoreLowerBetter(load.rttIncreaseMs, 30, 600), weight: 5 },
+    { name: 'jitter', score: scoreLowerBetter(load.jitterMs, 20, 250), weight: 8 },
     { name: 'loss', score: scoreLowerBetter(load.lossRate, 0, 0.1), weight: 7 },
-    { name: 'freshConnection', score: scoreLowerBetter(load.freshConnectionMs, 200, 2500), weight: 10 },
+    { name: 'freshConnection', score: scoreLowerBetter(load.freshConnectionMs, 250, 3000), weight: 10 },
     { name: 'fanout', score: scoreHigherBetter(load.fanoutSuccess, 1, 0.7), weight: 5 },
     { name: 'uplink', score: scoreHigherBetter(load.uplinkMbps, 5, 0.2), weight: 5 },
   ], { requireAll: false });
@@ -117,7 +121,8 @@ function gateMetricsFrom(load) {
   return {
     sustainedMbps: load.sustainedMbps,
     shapingRatio: load.shapingRatio,
-    loadedRttMs: load.loadedRttMs,
+    rpm: load.rpm,
+    rttIncreaseMs: load.rttIncreaseMs,
     rttInflation: load.rttInflation,
     jitterMs: load.jitterMs,
     lossRate: load.lossRate,
@@ -125,6 +130,15 @@ function gateMetricsFrom(load) {
     freshConnectionMs: load.freshConnectionMs,
     uplinkMbps: load.uplinkMbps,
   };
+}
+
+export function limitingFactor(gates) {
+  if (!gates || !gates.limiting) return null;
+  const check = (gates.checks || []).find((item) => item.name === gates.limiting);
+  const label = GATE_LABELS.get(gates.limiting) || gates.limiting;
+  if (!check) return label;
+  const value = check.value === null ? 'not measured' : `${check.value}${check.unit === 'ratio' || check.unit === 'x' ? '' : ` ${check.unit}`}`;
+  return `${label}: ${value}`;
 }
 
 export function applyTunnelResults(
@@ -141,8 +155,6 @@ export function applyTunnelResults(
   const loadScore = scoreLoad(load);
   const loadRequired = Boolean(requirements.load);
 
-  // With the load stage enabled the weights shift: how the link behaves under
-  // sustained traffic matters as much as a single page or stream sample.
   const components = loadRequired
     ? [
       { name: 'browsing', score: browsingScore === null ? null : browsingScore / 100, weight: requirements.browsing ? 30 : 0 },
@@ -164,10 +176,11 @@ export function applyTunnelResults(
     item.name === 'reliability' ? { ...item, score: summary.eligibility.confidence95.lower } : item
   ), { requireAll: true });
 
-  // Absolute gates can only lower a score. A candidate that fails a gate can
-  // never be presented as good, no matter how the rest of the run performed.
   const gates = loadRequired
-    ? evaluateGates(gateMetricsFrom(load), { overrides: options.gateOverrides })
+    ? evaluateGates(gateMetricsFrom(load), {
+      overrides: options.gateOverrides,
+      profile: options.gateProfile,
+    })
     : null;
   const overall = gates ? capScore(rawOverall, gates) : rawOverall;
   const conservative = gates ? capScore(rawConservative, gates) : rawConservative;
@@ -187,6 +200,7 @@ export function applyTunnelResults(
     load,
     gates,
     verdict,
+    limitingFactor: limitingFactor(gates),
     measurement: {
       status: rawOverall === null ? 'incomplete' : 'complete',
       completeness: round(completeness, 3),
@@ -206,12 +220,12 @@ export function applyTunnelResults(
   };
 }
 
-export function buildCandidateSummary({ ip, range, eligibility, tunnel, requirements, temporalBlocks, gateOverrides }) {
+export function buildCandidateSummary({ ip, range, eligibility, tunnel, requirements, temporalBlocks, gateOverrides, gateProfile }) {
   return applyTunnelResults(
     buildEligibilitySummary({ ip, range, eligibility, temporalBlocks }),
     tunnel,
     requirements,
-    { gateOverrides },
+    { gateOverrides, gateProfile },
   );
 }
 
@@ -224,6 +238,12 @@ export function rankCandidates(summaries) {
     const scoreA = a.scores.conservative ?? -1;
     const scoreB = b.scores.conservative ?? -1;
     if (scoreB !== scoreA) return scoreB - scoreA;
+    const mbpsA = a.load?.sustainedMbps ?? -1;
+    const mbpsB = b.load?.sustainedMbps ?? -1;
+    if (mbpsB !== mbpsA) return mbpsB - mbpsA;
+    const rpmA = a.load?.rpm ?? -1;
+    const rpmB = b.load?.rpm ?? -1;
+    if (rpmB !== rpmA) return rpmB - rpmA;
     return (a.eligibility.handshakeMedianMs ?? Infinity) - (b.eligibility.handshakeMedianMs ?? Infinity);
   });
 }
@@ -245,6 +265,7 @@ export function writeReport({ directory, runId, target, settings, candidates, st
       gateFailed: ranked.filter((item) => item.gates?.status === 'fail').length,
       recommended: ranked.filter((item) => item.verdict?.label === 'recommended').length,
       bytesMeasured: ranked.reduce((total, item) => total + (item.measurement?.bytesMeasured || 0), 0),
+      limitingFactors: countLimitingFactors(ranked),
     },
     results: ranked,
   };
@@ -256,18 +277,30 @@ export function writeReport({ directory, runId, target, settings, candidates, st
   return { jsonPath, latestPath, topPath, report };
 }
 
+export function countLimitingFactors(ranked) {
+  const counts = {};
+  for (const item of ranked) {
+    const name = item.gates?.limiting;
+    if (!name) continue;
+    counts[name] = (counts[name] || 0) + 1;
+  }
+  return counts;
+}
+
 export function renderTopList(ranked, limit = 20) {
-  const header = ['IP', 'Verdict', 'Conservative', 'Overall', 'Mbps', 'Shaping', 'RTT-load', 'Confidence', 'POP'].join('\t');
+  const header = ['IP', 'Verdict', 'Conservative', 'Overall', 'Mbps', 'RPM', 'Shaping', 'AddedRTT', 'Confidence', 'POP', 'Limiting'].join('\t');
   const lines = ranked.slice(0, limit).map((item) => [
     item.ip,
     item.verdict?.label || item.measurement.status,
     item.scores.conservative ?? '-',
     item.scores.overall ?? '-',
     item.load?.sustainedMbps ?? '-',
+    item.load?.rpm ?? '-',
     item.load?.shapingRatio ?? '-',
-    item.load?.loadedRttMs ?? '-',
+    item.load?.rttIncreaseMs ?? '-',
     item.eligibility.confidence,
     item.eligibility.pops.dominant || '-',
+    item.gates?.limiting || '-',
   ].join('\t'));
   return [header, ...lines].join('\n');
 }

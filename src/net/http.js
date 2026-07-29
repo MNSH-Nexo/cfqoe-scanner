@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import { performance } from 'node:perf_hooks';
 import { connectSocks5 } from './socks5.js';
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 CFQoE/0.7';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 CFQoE/0.8';
 
 function createAgent({ proxy, secure, timeoutMs, maxSockets }) {
   const Base = secure ? https.Agent : http.Agent;

@@ -5,64 +5,40 @@ import tls from 'node:tls';
 import { performance } from 'node:perf_hooks';
 import { connectSocks5 } from './socks5.js';
 
-const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CFQoE/0.5';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 CFQoE/0.6';
 
-function createAgent({ proxy, secure, timeoutMs }) {
+function createAgent({ proxy, secure, timeoutMs, maxSockets }) {
   const Base = secure ? https.Agent : http.Agent;
-
   class ProxyAgent extends Base {
     createConnection(options, callback) {
       const port = Number(options.port) || (secure ? 443 : 80);
       const host = options.host;
-
-      const dial = proxy
-        ? connectSocks5(proxy, { host, port }, timeoutMs)
-        : Promise.resolve(net.connect({ host, port }));
-
-      dial
-        .then((socket) => {
-          if (!secure) {
-            callback(null, socket);
-            return;
-          }
-          const secureSocket = tls.connect({
-            socket,
-            servername: options.servername || host,
-            ALPNProtocols: ['http/1.1'],
-          });
-          secureSocket.once('secureConnect', () => callback(null, secureSocket));
-          secureSocket.once('error', (error) => callback(error));
-        })
-        .catch((error) => callback(error));
-
+      const dial = proxy ? connectSocks5(proxy, { host, port }, timeoutMs) : Promise.resolve(net.connect({ host, port }));
+      dial.then((socket) => {
+        if (!secure) return callback(null, socket);
+        const secureSocket = tls.connect({ socket, servername: options.servername || host, ALPNProtocols: ['http/1.1'] });
+        secureSocket.once('secureConnect', () => callback(null, secureSocket));
+        secureSocket.once('error', callback);
+      }).catch(callback);
       return undefined;
     }
   }
-
-  return new ProxyAgent({ keepAlive: true, maxSockets: 6, maxFreeSockets: 6 });
+  return new ProxyAgent({ keepAlive: true, maxSockets, maxFreeSockets: maxSockets });
 }
 
-// A small HTTP client that can optionally tunnel every request through SOCKS5.
-export function createHttpClient({ proxy = null, timeoutMs = 15000 } = {}) {
+export function createHttpClient({ proxy = null, timeoutMs = 15000, maxSockets = 1 } = {}) {
   const agents = { http: null, https: null };
-
   function agentFor(secure) {
     const key = secure ? 'https' : 'http';
-    if (!agents[key]) agents[key] = createAgent({ proxy, secure, timeoutMs });
+    if (!agents[key]) agents[key] = createAgent({ proxy, secure, timeoutMs, maxSockets });
     return agents[key];
   }
 
-  function request(rawUrl, { captureBody = false, maxBytes = 4 * 1024 * 1024, redirects = 3 } = {}) {
+  function request(rawUrl, { captureBody = false, maxBytes = 4 * 1024 * 1024, redirects = 3, headers = {} } = {}) {
     return new Promise((resolve) => {
       let url;
-      try {
-        url = new URL(rawUrl);
-      } catch {
-        resolve({ url: rawUrl, ok: false, error: 'invalid_url', bytes: 0, ttfbMs: null, totalMs: null });
-        return;
-      }
-
+      try { url = new URL(rawUrl); }
+      catch { resolve({ url: rawUrl, ok: false, error: 'invalid_url', bytes: 0, ttfbMs: null, totalMs: null }); return; }
       const secure = url.protocol === 'https:';
       const transport = secure ? https : http;
       const started = performance.now();
@@ -70,88 +46,62 @@ export function createHttpClient({ proxy = null, timeoutMs = 15000 } = {}) {
       let bytes = 0;
       const chunks = [];
       let settled = false;
-
+      let exceeded = false;
       const finish = (result) => {
         if (settled) return;
         settled = true;
         resolve({
-          url: rawUrl,
-          ok: false,
-          statusCode: null,
+          url: rawUrl, ok: false, statusCode: null,
           ttfbMs: ttfb === null ? null : Math.round((ttfb - started) * 100) / 100,
           totalMs: Math.round((performance.now() - started) * 100) / 100,
-          bytes,
-          error: null,
-          ...result,
+          bytes, error: null, ...result,
         });
       };
-
-      const clientRequest = transport.request(
-        {
-          protocol: url.protocol,
-          host: url.hostname,
-          port: url.port || (secure ? 443 : 80),
-          path: `${url.pathname}${url.search}`,
-          method: 'GET',
-          servername: url.hostname,
-          agent: agentFor(secure),
-          headers: {
-            Host: url.host,
-            Accept: '*/*',
-            'Accept-Encoding': 'identity',
-            'User-Agent': USER_AGENT,
-            Connection: 'keep-alive',
-          },
+      const clientRequest = transport.request({
+        protocol: url.protocol,
+        host: url.hostname,
+        port: url.port || (secure ? 443 : 80),
+        path: `${url.pathname}${url.search}`,
+        method: 'GET',
+        servername: url.hostname,
+        agent: agentFor(secure),
+        headers: {
+          Host: url.host, Accept: '*/*', 'Accept-Encoding': 'identity',
+          'User-Agent': USER_AGENT, Connection: 'keep-alive', ...headers,
         },
-        (response) => {
-          ttfb = performance.now();
-          const status = response.statusCode || 0;
-
-          if ([301, 302, 303, 307, 308].includes(status) && response.headers.location && redirects > 0) {
-            response.resume();
-            const next = new URL(response.headers.location, url).toString();
-            request(next, { captureBody, maxBytes, redirects: redirects - 1 }).then((result) =>
-              finish({ ...result, redirected: true }),
-            );
-            return;
-          }
-
-          response.on('data', (chunk) => {
-            bytes += chunk.length;
-            if (captureBody && bytes <= maxBytes) chunks.push(chunk);
-            if (bytes > maxBytes && !captureBody) response.destroy();
+      }, (response) => {
+        ttfb = performance.now();
+        const status = response.statusCode || 0;
+        if ([301, 302, 303, 307, 308].includes(status) && response.headers.location && redirects > 0) {
+          response.resume();
+          const next = new URL(response.headers.location, url).toString();
+          request(next, { captureBody, maxBytes, redirects: redirects - 1, headers }).then((result) => finish({ ...result, redirected: true }));
+          return;
+        }
+        response.on('data', (chunk) => {
+          bytes += chunk.length;
+          if (bytes > maxBytes) { exceeded = true; response.destroy(); return; }
+          if (captureBody) chunks.push(chunk);
+        });
+        response.on('end', () => {
+          if (exceeded) return finish({ statusCode: status, error: 'body_limit_exceeded' });
+          const ok = status >= 200 && status < 400;
+          finish({
+            ok, statusCode: status, contentType: response.headers['content-type'] || null,
+            body: captureBody ? Buffer.concat(chunks) : undefined,
+            error: ok ? null : `http_${status}`,
           });
-
-          response.on('end', () => {
-            const ok = status >= 200 && status < 400;
-            finish({
-              ok,
-              statusCode: status,
-              contentType: response.headers['content-type'] || null,
-              body: captureBody ? Buffer.concat(chunks) : undefined,
-              error: ok ? null : `http_${status}`,
-            });
-          });
-
-          response.on('aborted', () => finish({ statusCode: status, error: 'aborted' }));
-        },
-      );
-
+        });
+        response.on('aborted', () => finish({ statusCode: status, error: exceeded ? 'body_limit_exceeded' : 'aborted' }));
+      });
       clientRequest.setTimeout(timeoutMs, () => clientRequest.destroy(new Error('timeout')));
-      clientRequest.on('error', (error) => finish({ error: error.code || error.message }));
+      clientRequest.on('error', (error) => finish({ error: exceeded ? 'body_limit_exceeded' : error.code || error.message }));
       clientRequest.end();
     });
   }
-
-  return {
-    request,
-    close() {
-      for (const agent of Object.values(agents)) agent?.destroy();
-    },
-  };
+  return { request, close() { for (const agent of Object.values(agents)) agent?.destroy(); } };
 }
 
-// Extracts a small, deterministic set of sub-resources from an HTML document.
 export function extractAssets(html, baseUrl, limit = 8) {
   const text = String(html);
   const found = [];
@@ -161,19 +111,13 @@ export function extractAssets(html, baseUrl, limit = 8) {
     /<link[^>]+href=["']([^"']+\.css[^"']*)["']/gi,
     /<img[^>]+src=["']([^"']+)["']/gi,
   ];
-
   for (const pattern of patterns) {
     let match = pattern.exec(text);
     while (match !== null) {
-      let absolute;
-      try {
-        absolute = new URL(match[1], baseUrl).toString();
-      } catch {
-        absolute = null;
-      }
+      let absolute = null;
+      try { absolute = new URL(match[1], baseUrl).toString(); } catch { /* ignore */ }
       if (absolute && !seen.has(absolute) && /^https?:/.test(absolute)) {
-        seen.add(absolute);
-        found.push(absolute);
+        seen.add(absolute); found.push(absolute);
       }
       if (found.length >= limit) return found;
       match = pattern.exec(text);

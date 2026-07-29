@@ -18,11 +18,12 @@ test('parseArgs rejects options with a missing value', () => {
 });
 
 test('applyOptions overrides settings without mutating the source', () => {
+  const originalMax = DEFAULT_SETTINGS.scan.maxCandidates;
   const next = applyOptions(DEFAULT_SETTINGS, parseArgs(['--max', '5', '--tunnel-limit', '2', '--no-streaming']));
   assert.equal(next.scan.maxCandidates, 5);
   assert.equal(next.tunnel.limit, 2);
   assert.equal(next.streaming.enabled, false);
-  assert.equal(DEFAULT_SETTINGS.scan.maxCandidates, 40);
+  assert.equal(DEFAULT_SETTINGS.scan.maxCandidates, originalMax);
   assert.equal(DEFAULT_SETTINGS.streaming.enabled, true);
 });
 

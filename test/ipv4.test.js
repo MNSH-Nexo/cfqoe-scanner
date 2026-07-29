@@ -26,16 +26,22 @@ test('parseRangeList strips comments, blank lines, and tabular exports', () => {
   assert.deepEqual(list, ['104.16.0.0/13', '172.64.0.0/13']);
 });
 
-test('sampleCandidates is deterministic and respects limits', () => {
+test('sampleCandidates is deterministic for a given seed and respects limits', () => {
   const ranges = ['104.16.0.0/13', '172.64.0.0/13'];
   const first = sampleCandidates({ ranges, perRange: 3, max: 10, seed: 7 });
   const second = sampleCandidates({ ranges, perRange: 3, max: 10, seed: 7 });
   assert.deepEqual(first, second);
   assert.equal(first.length, 6);
   assert.equal(new Set(first.map((item) => item.ip)).size, 6);
-
   const capped = sampleCandidates({ ranges, perRange: 5, max: 4, seed: 7 });
   assert.equal(capped.length, 4);
+});
+
+test('different seeds produce different samples', () => {
+  const ranges = Array.from({ length: 20 }, (_value, index) => `198.51.${index}.0/24`);
+  const first = sampleCandidates({ ranges, perRange: 2, max: 16, seed: 7 });
+  const second = sampleCandidates({ ranges, perRange: 2, max: 16, seed: 8 });
+  assert.notDeepEqual(first, second);
 });
 
 test('sampleCandidates spreads early picks across many ranges', () => {

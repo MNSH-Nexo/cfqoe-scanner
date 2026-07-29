@@ -81,17 +81,32 @@ The menu opens:
 
   1. Quick Scan            fast check with a small candidate set
   2. Full Scan             wider sampling and more rounds
-  3. VLESS Configuration   import, inspect or remove your config
-  4. Workload Settings     choose or add browsing and streaming targets
-  5. System Check          verify Node, Xray and file protection
-  6. Best IPs              show the latest ranking
-  7. Previous Results      list saved reports
-  8. Diagnostics           summarize the newest log file
-  9. Advanced Settings     tune rounds, limits and timeouts
+  3. Hard Deep Scan        sequential, checkpointed, resumable sweep
+  4. Resume Hard Scan      continue the last deep sweep
+  5. VLESS Configuration   import, inspect or remove your config
+  6. Workload Settings     choose or add browsing and streaming targets
+  7. System Check          verify Node, Xray and file protection
+  8. Best IPs              show the latest ranking
+  9. Previous Results      list saved reports
+  10. Diagnostics          summarize the newest log file
+  11. Scan Settings        edit numbers with a friendly picker
   0. Exit
 ```
 
-Choose **3** first and paste your `vless://` link, then run **1 (Quick Scan)**.
+Choose **5** first and paste your `vless://` link, then run **1 (Quick Scan)**.
+
+---
+
+## Default workloads
+
+The defaults now avoid Cloudflare-owned pages as the primary baseline:
+
+- **Browsing default:** `wikipedia`
+- **Streaming default:** `apple-bipbop`
+
+You can still enable Cloudflare pages or switch to other public HLS streams like Bitmovin or Mux.
+YouTube was intentionally not made a built-in stream target because it does not expose a stable,
+public `.m3u8` workflow suitable for consistent unattended testing.
 
 ---
 
@@ -105,12 +120,14 @@ That matters in difficult networks: if many Cloudflare edges are blocked or unst
 full scan can still reach farther into the catalog instead of getting stuck near the top of the
 file.
 
-If you want an even longer hunt, raise these from **Advanced Settings**:
+If you want an even longer hunt, raise these from **Scan Settings**:
 
-- `scan.maxCandidates`
-- `scan.rounds`
-- `tunnel.limit`
-- `tunnel.rounds`
+- `Max candidates (full scan)`
+- `Eligibility rounds`
+- `Tunnel finalists`
+- `Tunnel rounds`
+
+Or use **Hard Deep Scan** for a checkpointed sequential sweep.
 
 ---
 
@@ -145,6 +162,8 @@ cfqoe                       # interactive menu
 cfqoe import "vless://..."  # store your configuration locally
 cfqoe quick                 # reduced scan
 cfqoe scan --max 60 --tunnel-limit 8 --segments 4
+cfqoe hard                  # sequential resumable deep scan
+cfqoe resume                # continue the last hard scan
 cfqoe scan --no-streaming --debug
 cfqoe check                 # environment check
 cfqoe results               # latest ranking
@@ -169,8 +188,8 @@ On Windows replace `cfqoe` with `node bin\cfqoe.js`.
 
 ## Workloads
 
-Built-in defaults cover a documentation page, a Cloudflare page, Wikipedia, and two public HLS
-test streams. From menu option **4** you can toggle them or add your own:
+Built-in defaults now use a public non-Cloudflare page and a public non-Cloudflare HLS stream.
+From menu option **6** you can toggle other built-ins or add your own:
 
 - a **page URL** for browsing tests
 - an **`.m3u8` manifest** for streaming tests

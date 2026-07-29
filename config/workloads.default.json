@@ -1,6 +1,11 @@
 {
   "browsing": [
     {
+      "name": "wikipedia",
+      "description": "Wikipedia main page, mixed static assets and third-party style delivery",
+      "pageUrl": "https://en.wikipedia.org/wiki/Main_Page"
+    },
+    {
       "name": "cloudflare-docs",
       "description": "Cloudflare developer documentation page with sub-resources",
       "pageUrl": "https://developers.cloudflare.com/"
@@ -9,24 +14,25 @@
       "name": "cloudflare-speed",
       "description": "Cloudflare speed landing page",
       "pageUrl": "https://speed.cloudflare.com/"
-    },
-    {
-      "name": "wikipedia",
-      "description": "Wikipedia main page, mixed static assets",
-      "pageUrl": "https://en.wikipedia.org/wiki/Main_Page"
     }
   ],
   "streaming": [
     {
-      "name": "mux-test-hls",
-      "description": "Mux public HLS test stream",
-      "manifestUrl": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+      "name": "apple-bipbop",
+      "description": "Apple BipBop reference HLS stream, closer to real public playback than synthetic lab pages",
+      "manifestUrl": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8",
       "segmentDurationSec": 10
     },
     {
-      "name": "apple-bipbop",
-      "description": "Apple BipBop reference HLS stream",
-      "manifestUrl": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8",
+      "name": "bitmovin-sintel",
+      "description": "Bitmovin public HLS demo stream delivered over a mainstream video platform CDN",
+      "manifestUrl": "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+      "segmentDurationSec": 10
+    },
+    {
+      "name": "mux-test-hls",
+      "description": "Mux public HLS test stream",
+      "manifestUrl": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
       "segmentDurationSec": 10
     }
   ]

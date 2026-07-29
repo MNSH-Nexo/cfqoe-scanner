@@ -23,13 +23,13 @@ export const DEFAULT_SETTINGS = {
   },
   browsing: {
     enabled: true,
-    workloads: ['cloudflare-docs'],
+    workloads: ['wikipedia'],
     assetLimit: 6,
     timeoutMs: 15000,
   },
   streaming: {
     enabled: true,
-    workloads: ['mux-test-hls'],
+    workloads: ['apple-bipbop'],
     maxSegments: 3,
     startupBufferSec: 4,
     safetyFactor: 1.25,

@@ -1,3 +1,5 @@
+import readline from 'node:readline';
+
 // Small ANSI helpers that degrade gracefully on legacy Windows terminals.
 const enabled = process.env.NO_COLOR === undefined && process.stdout.isTTY !== false;
 const LINE_WIDTH = 140;
@@ -31,6 +33,13 @@ export function progressBar({ completed, total, width = 28 }) {
   return `[${'#'.repeat(filled)}${'-'.repeat(width - filled)}] ${Math.round(ratio * 100)}%`;
 }
 
+function redrawLine(text) {
+  if (!process.stdout.isTTY) return;
+  readline.cursorTo(process.stdout, 0);
+  readline.clearLine(process.stdout, 0);
+  process.stdout.write(text.slice(0, LINE_WIDTH));
+}
+
 export function writeProgress(label, state) {
   if (!process.stdout.isTTY) return;
   const extras = [];
@@ -40,12 +49,13 @@ export function writeProgress(label, state) {
   if (state.note) extras.push(state.note);
   const extraText = extras.length > 0 ? `  ${extras.join('  ')}` : '';
   const line = `  ${label.padEnd(14)} ${progressBar(state)} ${state.completed}/${state.total}${extraText}`;
-  process.stdout.write(`\r${line.padEnd(LINE_WIDTH)}`);
+  redrawLine(line);
 }
 
 export function clearProgress() {
   if (!process.stdout.isTTY) return;
-  process.stdout.write(`\r${' '.repeat(LINE_WIDTH)}\r`);
+  readline.cursorTo(process.stdout, 0);
+  readline.clearLine(process.stdout, 0);
 }
 
 export function table(rows, headers) {

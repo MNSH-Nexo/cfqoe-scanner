@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0
+
+نسخه 0.6.0 آماری بود اما حجم اندازه‌گیری کوچک بود: هر کاندید فقط با چند صد کیلوبایت سنجیده می‌شد و امتیاز کاملاً نسبی بود. نتیجه این بود که یک IP خفه‌شده می‌توانست ۹۱ بگیرد. 0.7.0 این را اصلاح می‌کند.
+
+### Added
+- مرحله **Real Load** (`src/probe/load.js`): دانلود پیوسته چانک‌های چندمگابایتی در یک بودجه زمانی، پینگ همزمان زیر بار، fan-out موازی روی اتصال تازه و آپلود چندمگابایتی.
+- متریک‌های جدید: `sustainedMbps`، `peakMbps`، `earlyMbps`، `lateMbps`، `shapingRatio`، `idleRttMs`، `loadedRttMs`، `rttInflation`، `jitterMs`، `lossRate`، `fanoutSuccess`، `freshConnectionMs`، `uplinkMbps`.
+- **گیت‌های مطلق** (`src/measurement/gates.js`) با سقف امتیاز (`pass` ۱۰۰ / `warn` ۷۵ / `fail` ۴۵) و برچسب `verdict` (`recommended` … `unusable`).
+- بخش `load` در تنظیمات (`durationMs`، `chunkBytes`، `uploadBytes`، `fanoutRequests`، `idleSamples`، `minBytes`، `endpoints`، `gates`) و ویرایش آن از منوی Scan Settings.
+- فلگ‌های CLI: `--no-load`، `--load-duration`، `--load-chunk-mb`.
+- `estimateTrafficBytes()` برای برآورد حجم ترافیک هر اجرا.
+- تست‌های جدید برای پنجره‌های throughput، تشخیص shaping، latency زیر بار، fan-out، گیت‌ها، رتبه‌بندی و migration تنظیمات.
+
+### Changed
+- schema گزارش `7`؛ نسخه تولیدکننده `0.7.0`. هر کاندید `load`، `gates`، `verdict`، `scores.load`، `scores.overallUncapped` و `measurement.bytesMeasured` دارد.
+- وزن‌های Overall با فعال بودن Real Load: Web Transfer ۳۰٪، Streaming ۳۰٪، Real Load ۲۵٪، Reliability ۱۵٪.
+- رتبه‌بندی ابتدا بر اساس `verdict` و سپس امتیاز محافظه‌کارانه انجام می‌شود.
+- حجم پیش‌فرض مراحل قبلی افزایش یافت: segmentهای استریم ۱۰ → ۲۴ (اندروید ۱۴)، asset limit انتقال ۶ → ۱۴ (اندروید ۱۰) و timeoutهای سخاوتمندانه‌تر.
+- تنظیمات نسخه `3`؛ فایل‌های نسخه ۲ که مقادیر کم پیش‌فرض داشتند به‌صورت خودکار به مقادیر جدید مهاجرت می‌کنند و `migratedFrom` ثبت می‌شود (مقادیر دست‌کاری‌شده کاربر دست‌نخورده می‌ماند).
+- جدول رتبه‌بندی CLI ستون‌های `Verdict`، `Mbps`، `Shaping`، `RTT-load` و `Traffic` گرفت؛ `best-ips.txt` هم همین اطلاعات را دارد.
+- کلاینت HTTP از متد، بدنه، غیرفعال‌کردن keep-alive و callbackهای first-byte/progress پشتیبانی می‌کند.
+
+### Removed
+- ماژول‌های بی‌استفاده `src/probe/aggregate.js` و `src/streaming/aggregate.js`.
+
 ## 0.6.0
 
 This release turns CFQoE from a linear probing pipeline into a staged, adaptive measurement system that reports uncertainty instead of hiding it.

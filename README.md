@@ -2,18 +2,22 @@
 
 اسکنر حرفه‌ای IPهای کلودفلر بر اساس **کیفیت واقعی تجربه کاربر**؛ نه صرفاً ping، نه TCP connect و نه speedtest چنداتصالی و مصنوعی.
 
-CFQoE Scanner روی **Windows، Linux و Android/Termux** اجرا می‌شود و IPها را با WebSocket واقعی، تونل واقعی Xray، بارگذاری صفحه وب و استریم HLS رتبه‌بندی می‌کند.
+CFQoE Scanner روی **Windows، Linux و Android/Termux** اجرا می‌شود و IPها را با WebSocket واقعی، تونل واقعی Xray، انتقال واقعی HTTP و استریم HLS رتبه‌بندی می‌کند.
+
+از نسخه **0.6.0** این ابزار دیگر یک pipeline خطی نیست؛ یک **سامانه اندازه‌گیری تطبیقی با عدم‌قطعیت آماری** است: هر عدد همراه با بازه اطمینان، برچسب اعتماد و وضعیت کامل/ناقص بودن گزارش می‌شود.
 
 ## ویژگی‌ها
 
 - پشتیبانی از Windows، Linux و Android/Termux بدون نیاز به سرور
 - پشتیبانی از VLESS + WebSocket
 - دانلود خودکار نسخه رسمی و مناسب Xray
-- نمونه تصادفی تازه در هر اجرای Quick و Full Scan
-- Hard Scan به‌صورت range round-robin، checkpointed و قابل Resume
-- توقف امن با `Q` یا `Ctrl+C` و نهایی‌سازی نتایج موجود
-- اندازه‌گیری واقعی browsing و streaming
-- گزارش JSON، رتبه‌بندی متنی و لاگ ساخت‌یافته
+- بازه اطمینان Wilson و امتیاز محافظه‌کارانه برای هر IP
+- تأیید تطبیقی نتایج با آزمون SPRT (نمونه‌گیری فقط تا رسیدن به تصمیم قطعی)
+- کالیبراسیون concurrency قبل از اسکن برای اندازه‌نگرفتن ازدحام خودمان
+- تفکیک خطای سخت و نرم + صف retry تأخیری
+- ثبت POP کلودفلر (`cf-ray`) و بررسی یکنواختی آن
+- استریم با ABR واقعی یا نردبان بیت‌ریت ثابت
+- گزارش JSON (schema 6)، رتبه‌بندی متنی و لاگ ساخت‌یافته
 - محافظت محلی از URI و حذف اطلاعات حساس از گزارش‌ها
 
 ---
@@ -66,139 +70,127 @@ cd ~/cfqoe-scanner
 3. `System Check` را اجرا کنید.
 4. ابتدا `Quick Scan` بزنید.
 5. نتیجه را از `Best IPs` ببینید.
-6. برای پوشش وسیع‌تر Full Scan و برای جست‌وجوی طولانی Hard Deep Scan را اجرا کنید.
+6. برای پوشش وسیع‌تر Full Scan، برای عدد قابل دفاع Research Scan و برای جست‌وجوی طولانی Hard Deep Scan را اجرا کنید.
 
 ## منوی اصلی
 
 ```text
-1. Quick Scan            fresh random sample, small and fast
-2. Full Scan             fresh wider sample and more rounds
-3. Hard Deep Scan        one IP per range per pass, resumable
-4. Resume Hard Scan      continue the last deep sweep
-5. VLESS Configuration   import, inspect or remove your config
-6. Workload Settings     choose or add browsing and streaming targets
-7. System Check          verify Node, Xray and file protection
-8. Best IPs              show the latest ranking
-9. Previous Results      list saved reports
-10. Diagnostics          summarize the newest log file
-11. Scan Settings        edit numbers with a friendly picker
+1. Quick Scan            fast screening, low confidence labels
+2. Full Scan             wider sample with independent verification
+3. Research Scan         slow, high-confidence measurement profile
+4. Hard Deep Scan        parallel one-IP-per-range sweep, resumable
+5. Resume Hard Scan      continue the last deep sweep
+6. VLESS Configuration   import, inspect or remove your config
+7. Workload Settings     choose or add transfer and streaming targets
+8. System Check          verify Node, Xray and file protection
+9. Best IPs              show the latest ranking with confidence
+10. Previous Results     list saved reports
+11. Diagnostics          summarize the newest log file
+12. Scan Settings        edit measurement and verification numbers
 0. Exit
 ```
 
-خروجی هر گزینه زیر همان منو نمایش داده می‌شود و تا زمانی که Enter نزده‌اید پاک نخواهد شد. این رفتار باعث می‌شود نتیجه اسکن، Previous Results و Diagnostics روی Termux هم قابل مشاهده بمانند.
+خروجی هر گزینه زیر همان منو نمایش داده می‌شود و تا زمانی که Enter نزده‌اید پاک نخواهد شد.
 
 ---
 
-# تفاوت Quick، Full و Hard
+# تفاوت Quick، Full، Research و Hard
 
-## Quick Scan
+| حالت | تعداد IP | roundها | نمونه استریم | تأیید |
+| --- | --- | --- | --- | --- |
+| Quick | ۱۶ | ۲ | ۳ | کوتاه‌شده |
+| Full | ۱۲۰ | ۳ | ۱۰ | SPRT روی ۲۰ finalist |
+| Research | ۲۴۰+ | ۶+ | ۲۹ | SPRT روی ۲۴ finalist تا ۲۴ round |
+| Hard | تمام catalog | screening + تأیید | ۱۰ | SPRT + retry تأخیری |
 
-- به‌طور پیش‌فرض فقط **16 IP** را بررسی می‌کند.
-- برای هر اجرا یک seed تصادفی تازه می‌سازد.
-- رنج‌ها و IPهای انتخابی هر اجرا باید با اجرای قبل متفاوت باشند.
-- برای تست سریع pipeline و گرفتن چند نتیجه اولیه طراحی شده است.
-
-## Full Scan
-
-- به‌طور پیش‌فرض **120 IP** را بررسی می‌کند.
-- تعداد آن از `Scan Settings → Max candidates` قابل تغییر است.
-- در هر اجرا seed تازه تولید می‌کند.
-- رنج‌ها با shuffled round-robin پخش می‌شوند تا انتخاب فقط از ابتدای فایل نباشد.
-- seed واقعی داخل لاگ و گزارش ذخیره می‌شود تا همان اجرا قابل دیباگ باشد.
-
-وجود حدود دو میلیون IP در catalog به این معنی نیست که Quick یا Full همه آن‌ها را در یک اجرا تست می‌کنند؛ چنین کاری بسیار طولانی خواهد بود. Quick و Full **sampled scans** هستند. برای پیمایش کامل و قابل ادامه باید از Hard Deep Scan استفاده شود.
-
-## Hard Deep Scan
-
-Hard Scan جدید breadth-first یا **range round-robin** است:
-
-1. اولین usable IP از رنج اول
-2. اولین usable IP از رنج دوم
-3. ادامه تا آخرین رنج
-4. دومین usable IP از رنج اول
-5. دومین usable IP از رنج دوم
-6. و به همین ترتیب تا پایان
-
-این روش باعث می‌شود در همان مراحل ابتدایی از تمام رنج‌ها پوشش بگیریم و اسکن ساعت‌ها داخل یک رنج بزرگ گیر نکند. رنج‌های کوچک پس از تمام شدن usable hostهایشان خودکار کنار گذاشته می‌شوند.
+- **Quick** فقط screening است؛ برچسب اعتماد نتایج آن پایین می‌ماند و نباید مبنای تصمیم نهایی باشد.
+- **Full** حالت پیش‌فرض روزمره است.
+- **Research** برای وقتی است که عدد باید قابل دفاع باشد؛ کند است و P10 واقعی گزارش می‌کند.
+- **Hard** کل catalog را breadth-first و range round-robin پیمایش می‌کند، checkpoint می‌سازد و با `Q` یا `Ctrl+C` امن متوقف می‌شود.
 
 Hard Scan همچنین:
 
 - network و broadcast را در subnetهای معمولی کنار می‌گذارد.
 - بعد از هر N IP checkpoint می‌سازد.
-- تعداد IPهای موفق و ناموفق را زنده نمایش می‌دهد.
-- با `Q` یا `Ctrl+C` امن متوقف می‌شود.
-- بعد از توقف، بهترین یافته‌ها را با tunnel/browsing/streaming نهایی می‌کند.
-- با `Resume Hard Scan` از cursor ذخیره‌شده ادامه می‌دهد.
-
-### سازگاری checkpoint قدیمی
-
-checkpointهایی که قبل از این تغییر ساخته شده‌اند از بین نمی‌روند و همچنان Resume می‌شوند، اما برای جلوگیری از تکرار یا جا افتادن IP، همان ترتیب قدیمی را تا پایان ادامه می‌دهند. هر Hard Scan جدید از روش range round-robin استفاده می‌کند.
+- خطاهای گذرا را در صف retry تأخیری نگه می‌دارد و بعداً دوباره امتحان می‌کند.
+- finalistها را با SPRT تأیید می‌کند.
+- با `Resume Hard Scan` از cursor ذخیره‌شده ادامه می‌دهد. checkpointهای نسخه قبل خودکار migrate می‌شوند.
 
 ---
 
 # روش اندازه‌گیری
 
+شرح کامل در [docs/MEASUREMENT-ENGINE.md](docs/MEASUREMENT-ENGINE.md) و [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+
 ## 1. Eligibility
 
-برای هر IP یک WebSocket Upgrade واقعی با host، path و port کانفیگ کاربر انجام می‌شود. پاسخ HTTP 101، موفقیت roundها و زمان handshake ثبت می‌شوند. TCP connect فقط برای diagnostics است و به‌تنهایی معیار رتبه‌بندی نیست.
+برای هر IP یک WebSocket Upgrade واقعی با host، path و port کانفیگ کاربر انجام می‌شود. پاسخ HTTP 101، موفقیت roundها، زمان handshake و POP کلودفلر ثبت می‌شوند. TCP connect فقط برای diagnostics است.
 
-## 2. Tunnel
+موفقیت هر IP به‌صورت بازه اطمینان Wilson گزارش می‌شود:
 
-از میان IPهای eligible چند finalist انتخاب می‌شوند. برای هر finalist:
+| مشاهده | برآورد نقطه‌ای | کران پایین Wilson |
+| --- | --- | --- |
+| 1/1 | ۱۰۰٪ | ≈ ۲۰.۷٪ |
+| 3/3 | ۱۰۰٪ | ≈ ۴۳.۹٪ |
+| 16/16 | ۱۰۰٪ | ≈ ۸۰.۶٪ |
 
-1. Xray با همان IP بالا می‌آید.
-2. SOCKS محلی روی `127.0.0.1` ایجاد می‌شود.
-3. browsing workload اجرا می‌شود.
-4. streaming workload اجرا می‌شود.
-5. Xray متوقف و فایل موقت حذف می‌شود.
+رتبه‌بندی با `conservative` انجام می‌شود، یعنی با کران پایین؛ پس IP کم‌نمونه به‌صرف خوش‌شانسی بالا نمی‌آید.
 
-اگر `tunnel.limit = 5` و `tunnel.rounds = 1` باشد، progress پنج‌مرحله‌ای یعنی پنج IP منتخب، نه پنج نوع تست.
+## 2. تأیید تطبیقی (SPRT)
 
-## 3. Browsing
+`p0 = 0.60`، `p1 = 0.90`، `alpha = 0.05`، `beta = 0.10`. IP واضحاً خوب یا واضحاً بد در چند round تعیین می‌شود و بودجه نمونه‌گیری صرف موارد مبهم می‌شود. تصمیم (`accept` / `reject` / `inconclusive`) در گزارش ذخیره می‌شود.
 
-- cold page load
-- warm page load
-- TTFB p90
-- موفقیت منابع صفحه
-- پایداری زمانی (MAD)
+## 3. Tunnel
 
-وزن داخلی:
+برای هر finalist، Xray با همان IP بالا می‌آید، SOCKS محلی ساخته می‌شود، workloadها اجرا می‌شوند و سپس Xray متوقف و فایل موقت حذف می‌شود.
 
-- موفقیت منابع: 40٪
-- cold load: 15٪
-- warm load: 20٪
-- TTFB p90: 15٪
-- پایداری: 10٪
+## 4. Web Transfer Score (قبلاً Browsing)
 
-## 4. Streaming
+این معیار **کیفیت انتقال HTTP قابل حمل** است، نه QoE مرورگر: DOM، اجرای جاوااسکریپت، رندر و connection pool مرورگر واقعی وجود ندارد و به‌عمد یک socket برای هر host استفاده می‌شود.
 
-manifest واقعی HLS خوانده می‌شود و segmentها به‌صورت ترتیبی دانلود می‌شوند.
+- موفقیت منابع: ۴۰٪
+- cold load: ۱۵٪
+- warm load: ۲۰٪
+- TTFB p90: ۱۵٪
+- پایداری (MAD): ۱۰٪
 
-- segment success rate
-- startup delay
-- rebuffer ratio
-- P10 sustainable bitrate
+## 5. Streaming
 
-وزن داخلی:
+manifest واقعی HLS خوانده می‌شود؛ `EXT-X-MAP`، `EXT-X-KEY`، byte range و discontinuity پشتیبانی می‌شوند و زمان آن‌ها در startup delay حساب می‌شود.
 
-- موفقیت: 35٪
-- startup delay: 15٪
-- rebuffer: 30٪
-- bitrate پایدار: 20٪
+- موفقیت segment: ۳۵٪
+- startup delay: ۱۵٪
+- rebuffer ratio: ۳۰٪
+- بیت‌ریت پایدار: ۲۰٪
+
+نکات نسخه ۰.۶:
+
+- فقط segmentهای موفق به بافر قابل پخش اضافه می‌شوند.
+- برآورد بیت‌ریت با **میانگین همساز** انجام می‌شود؛ P10 فقط با حداقل ۲۹ نمونه گزارش می‌شود و نام تخمین‌گر همراه عدد ذخیره می‌شود.
+- اگر پخش هرگز به بافر شروع نرسد، امتیازی داده نمی‌شود.
+- `variantMode = abr` رفتار واقعی ABR را شبیه‌سازی می‌کند؛ `fixed` نردبان بیت‌ریت هدف را انتخاب می‌کند.
 
 ## Overall Score
 
-- Browsing: 45٪
-- Streaming: 40٪
-- Reliability: 15٪
+- Web Transfer: ۴۵٪
+- Streaming: ۴۰٪
+- Reliability: ۱۵٪
 
-IPهایی که فقط eligibility دارند ولی browsing/streaming واقعی ندارند، overall score گمراه‌کننده دریافت نمی‌کنند.
+اگر مرحله‌ای انجام نشده باشد، وزن‌ها **بازتوزیع نمی‌شوند**؛ نتیجه `null` و وضعیت `incomplete` است. امتیاز خوش‌بینانه برای داده ناقص ساخته نمی‌شود.
+
+## برچسب اعتماد
+
+`provisional`، `low`، `medium`، `high` بر اساس تعداد نمونه و پخش‌شدگی در بلوک‌های زمانی مستقل. برچسب `high` یعنی «این اندازه‌گیری پایدار است»، نه «این IP خوب است».
+
+## رتبه‌بندی run-relative
+
+هر گزارش با `scope: "run-relative"` منتشر می‌شود. مقایسه امتیاز بین دو اجرا، دو دستگاه یا دو ISP در این روش پشتیبانی نمی‌شود.
 
 ---
 
 # Workload Settings
 
-### Browsing
+### Web Transfer
 
 - `wikipedia` — پیش‌فرض
 - `cloudflare-docs`
@@ -210,44 +202,19 @@ IPهایی که فقط eligibility دارند ولی browsing/streaming واقع
 - `bitmovin-sintel`
 - `mux-test-hls`
 
-YouTube به‌عنوان workload ثابت استفاده نشده، چون URL عمومی و پایدار `.m3u8` برای benchmark unattended ندارد و لینک‌های آن معمولاً token/expiry دارند.
-
----
-
-# Previous Results و Diagnostics
-
-## گزینه 9 — Previous Results
-
-تا 15 گزارش آخر را نمایش می‌دهد. روی ترمینال باریک Termux به‌جای جدول عریض، نمایش موبایل و چندخطی استفاده می‌شود.
-
-## گزینه 10 — Diagnostics
-
-جدیدترین فایل NDJSON را پیدا می‌کند و تعداد eventها، warningها و errorها را نشان می‌دهد. خطاها روی Termux به‌شکل فهرست باریک چاپ می‌شوند.
-
-پس از نمایش هرکدام، برنامه منتظر Enter می‌ماند تا خروجی فوراً زیر منوی بعدی گم نشود.
-
----
-
-# نکات Android/Termux
-
-- root لازم نیست.
-- برای اکثر گوشی‌ها `Xray-android-arm64-v8a` نصب می‌شود.
-- لانچر هنگام اجرا wake lock می‌گیرد و هنگام خروج آزاد می‌کند.
-- برای اسکن طولانی Battery Optimization مربوط به Termux را غیرفعال کنید.
-- پروژه را از shared storage اجرا نکنید.
-- در نصب تازه Android، concurrency کمتر و checkpointها پرتکرارتر هستند.
+YouTube به‌عنوان workload ثابت استفاده نشده، چون URL عمومی و پایدار `.m3u8` برای benchmark unattended ندارد.
 
 ---
 
 # فایل‌های خروجی
 
 ```text
-data/settings.json              تنظیمات کاربر
+data/settings.json              تنظیمات کاربر (version 2)
 data/config.secret.uri          کانفیگ محافظت‌شده
-results/run-<id>.json           گزارش کامل
+results/run-<id>.json           گزارش کامل (schema 6)
 results/latest.json             آخرین گزارش
 results/best-ips.txt            رتبه‌بندی متنی
-results/hard-scan/*             checkpoint و partial results
+results/hard-scan/*             checkpoint، صف retry و partial results
 logs/run-<id>.ndjson            لاگ ساخت‌یافته
 ```
 
@@ -268,6 +235,7 @@ logs/run-<id>.ndjson            لاگ ساخت‌یافته
 ```bash
 cfqoe quick
 cfqoe scan
+cfqoe research
 cfqoe hard
 cfqoe resume
 cfqoe check
@@ -277,11 +245,20 @@ npm run xray:install
 npm test
 ```
 
+فلگ‌های مفید:
+
+```bash
+cfqoe scan --verify-limit 30     # تعداد finalistهای مرحله تأیید
+cfqoe scan --no-verify           # غیرفعال کردن SPRT
+cfqoe scan --no-retry            # غیرفعال کردن retry تأخیری
+cfqoe scan --abr                 # استریم با ABR واقعی
+```
+
 ---
 
 # دقت نتایج
 
-این روش از ping و burst speedtest به استفاده واقعی نزدیک‌تر است، اما نتیجه همچنان به ISP، Wi-Fi یا اپراتور، ساعت تست، workload و شرایط لحظه‌ای شبکه وابسته است. بهترین کاربرد ابزار، رتبه‌بندی نسبی IPها روی همان دستگاه و همان اتصال است.
+این روش از ping و burst speedtest به استفاده واقعی نزدیک‌تر است، اما نتیجه همچنان به ISP، Wi-Fi یا اپراتور، ساعت تست، workload و شرایط لحظه‌ای شبکه وابسته است. بهترین کاربرد ابزار، رتبه‌بندی نسبی IPها روی همان دستگاه و همان اتصال در همان بازه زمانی است.
 
 ---
 

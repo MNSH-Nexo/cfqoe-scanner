@@ -1,245 +1,494 @@
 # CFQoE Scanner
 
-A Cloudflare clean-IP scanner for **Windows and Linux desktops** that ranks edge IPs by
-**real quality of experience**, not by ping.
+یک اسکنر حرفه‌ای برای پیدا کردن **IPهای مناسب کلودفلر** بر اساس **کیفیت واقعی تجربه کاربر**؛
+نه صرفاً پینگ، نه تست سرعت فیک، نه رتبه‌بندی بر اساس TCP connect.
 
-- **No TCP-ping ranking.** Connect time is recorded for diagnostics only.
-- **No multi-connection speed test.** Nothing is measured with parallel download streams.
-- **Ranking is based on what you actually feel:** how fast a real web page loads through the
-  tunnel, and whether a real video stream starts quickly and plays without rebuffering.
+این پروژه برای **ویندوز و لینوکس** ساخته شده و روی سیستم خود کاربر اجرا می‌شود. هدفش این است که از بین IPهای موجود، موردی را پیدا کند که در دنیای واقعی:
 
-Version 0.5.0 runs entirely on your own machine through an interactive terminal menu.
-No VPS and no origin server are required.
+- صفحه را بهتر باز کند
+- استریم را روان‌تر پخش کند
+- پایداری بیشتری برای VLESS + WS داشته باشد
 
 ---
 
-## Quick start
+## ایده اصلی پروژه
 
-### Requirements
+بیشتر اسکنرها یک یا چند کار اشتباه انجام می‌دهند:
 
-| Component | Requirement |
+- بر اساس **TCP ping / connect** تصمیم می‌گیرند
+- با **دانلود چنداتصالی** یک سرعت مصنوعی می‌سازند
+- به‌جای تجربه واقعی مرور و استریم، فقط یک عدد خام تحویل می‌دهند
+
+اما CFQoE Scanner بر پایه‌ی این نگاه ساخته شده:
+
+> مهم نیست یک IP روی کاغذ سریع به‌نظر برسد؛ مهم این است که در استفاده واقعی، برای کاربر بهتر عمل کند.
+
+برای همین معیار اصلی پروژه این‌ها هستند:
+
+- **Eligibility واقعی WebSocket**
+- **لود واقعی صفحه وب**
+- **استریم واقعی HLS**
+- **پایداری و تکرارپذیری نتیجه**
+
+---
+
+## ویژگی‌های اصلی
+
+- اجرای کامل روی **Windows / Linux desktop**
+- منوی ترمینالی تعاملی و ساده
+- پشتیبانی از **VLESS + WS**
+- استفاده از **Xray واقعی** برای تست تونل
+- رتبه‌بندی بر اساس **Browsing + Streaming + Reliability**
+- حالت **Quick Scan** برای تست سریع
+- حالت **Full Scan** برای بررسی دقیق‌تر
+- حالت **Hard Deep Scan** برای شرایط سخت، طولانی و قابل ادامه
+- امکان **Resume** بعد از قطع شدن یا توقف اسکن
+- ذخیره مرحله‌ای نتایج در اسکن سنگین
+- نمایش تعداد IPهای **موفق / ناموفق** حین اسکن
+- امکان توقف امن اسکن با **Q** یا **Ctrl+C**
+- امکان افزودن **صفحه وب دلخواه** و **استریم دلخواه**
+- ثبت لاگ ساخت‌یافته و دیباگ‌پذیر
+- حذف/مخفی‌سازی داده‌های حساس از لاگ‌ها
+
+---
+
+## نصب و اجرا
+
+### پیش‌نیازها
+
+| مورد | توضیح |
 | --- | --- |
-| Node.js | 20 or newer (24 recommended) |
-| Xray-core | auto-downloaded on first launch when online |
-| OS | Windows 10/11 x64, or Linux x64 |
+| Node.js | نسخه 20 یا بالاتر |
+| سیستم‌عامل | ویندوز 10/11 یا لینوکس |
+| Xray-core | در اجرای اول خودکار دانلود می‌شود |
 
-### 1. Download
+### دریافت پروژه
 
 ```bash
 git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git
 cd cfqoe-scanner
 ```
 
-Or download the ZIP from GitHub and extract it anywhere. The tool is portable: it never
-writes outside its own folder and never needs administrator rights.
+یا می‌توانی ZIP پروژه را از GitHub دانلود و Extract کنی.
 
-### 2. Xray bootstrap
+---
 
-On the first launch, the Windows and Linux starters automatically download the official
-Xray-core build for the current platform and place it in the local `xray/` folder.
+## دانلود خودکار Xray
 
-You can also do it manually:
+در اجرای اول، اگر فایل Xray داخل پوشه `xray/` موجود نباشد، پروژه **نسخه رسمی Xray-core** را به‌صورت خودکار دانلود می‌کند.
+
+### حالت دستی
+اگر خواستی دستی انجام بدهی:
 
 ```bash
 npm run xray:install
 ```
 
-If the machine is offline, or if automatic download is blocked, you can still place the
-binary manually:
+### محل باینری
+- ویندوز:
 
+```text
+cfqoe-scanner/xray/xray.exe
 ```
-cfqoe-scanner/xray/xray.exe    (Windows)
-cfqoe-scanner/xray/xray        (Linux, remember: chmod +x)
+
+- لینوکس:
+
+```text
+cfqoe-scanner/xray/xray
 ```
 
-Without Xray the scanner still measures WebSocket eligibility, but it cannot open the real
-tunnel, so page-loading and streaming scores are skipped.
+> در لینوکس اگر دستی قرارش دادی، `chmod +x` را فراموش نکن.
 
-### 3. Run
+---
 
-**Windows** — double click `Start-CFQoE.cmd`, or from PowerShell:
+## اجرای برنامه
+
+### ویندوز
+- فایل `Start-CFQoE.cmd` را اجرا کن
+- یا از PowerShell:
 
 ```powershell
 node bin\cfqoe.js
 ```
 
-**Linux**
+### لینوکس
 
 ```bash
 chmod +x start-cfqoe.sh
 ./start-cfqoe.sh
 ```
 
-The menu opens:
+---
 
-```
-+--------------------------------------------+
-|      CFQoE Cloudflare IP Scanner  v0.5.0   |
-|  Ranked by real browsing and streaming     |
-+--------------------------------------------+
-  config: ready   xray: found   platform: win32-x64
+## منوی اصلی
 
-  1. Quick Scan            fast check with a small candidate set
-  2. Full Scan             wider sampling and more rounds
-  3. Hard Deep Scan        sequential, checkpointed, resumable sweep
-  4. Resume Hard Scan      continue the last deep sweep
-  5. VLESS Configuration   import, inspect or remove your config
-  6. Workload Settings     choose or add browsing and streaming targets
-  7. System Check          verify Node, Xray and file protection
-  8. Best IPs              show the latest ranking
-  9. Previous Results      list saved reports
-  10. Diagnostics          summarize the newest log file
-  11. Scan Settings        edit numbers with a friendly picker
-  0. Exit
+```text
+1. Quick Scan            fast check with a small candidate set
+2. Full Scan             wider sampling and more rounds
+3. Hard Deep Scan        sequential, checkpointed, resumable sweep
+4. Resume Hard Scan      continue the last deep sweep
+5. VLESS Configuration   import, inspect or remove your config
+6. Workload Settings     choose or add browsing and streaming targets
+7. System Check          verify Node, Xray and file protection
+8. Best IPs              show the latest ranking
+9. Previous Results      list saved reports
+10. Diagnostics          summarize the newest log file
+11. Scan Settings        edit numbers with a friendly picker
+0. Exit
 ```
 
-Choose **5** first and paste your `vless://` link, then run **1 (Quick Scan)**.
+### توضیح گزینه‌ها
+
+#### 1) Quick Scan
+اسکن سبک و سریع برای بررسی اولیه.
+
+مناسب وقتی که می‌خواهی:
+- سریع مطمئن شوی pipeline کار می‌کند
+- چند IP اولیه بگیری
+- قبل از تست سنگین، یک ارزیابی سریع داشته باشی
 
 ---
 
-## Default workloads
+#### 2) Full Scan
+اسکن کامل‌تر با نمونه‌برداری وسیع‌تر و تکرار بیشتر.
 
-The defaults now avoid Cloudflare-owned pages as the primary baseline:
-
-- **Browsing default:** `wikipedia`
-- **Streaming default:** `apple-bipbop`
-
-You can still enable Cloudflare pages or switch to other public HLS streams like Bitmovin or Mux.
-YouTube was intentionally not made a built-in stream target because it does not expose a stable,
-public `.m3u8` workflow suitable for consistent unattended testing.
+مناسب برای:
+- گرفتن نتایج دقیق‌تر
+- مقایسه بهتر بین IPها
+- انتخاب نهایی برای استفاده واقعی
 
 ---
 
-## Range catalog and scan depth
+#### 3) Hard Deep Scan
+حالت سنگین و حرفه‌ای برای شرایط سخت.
 
-The bundled IPv4 catalog is an **extended Cloudflare-oriented range set**. The sampler walks it
-in shuffled round-robin passes, so even a very large list gets broad coverage before any one
-range receives many extra picks.
+ویژگی‌ها:
+- به‌جای نمونه‌برداری رندوم، **به‌صورت ترتیبی** جلو می‌رود
+- مرحله‌به‌مرحله پیشروی می‌کند
+- بعد از هر تعداد مشخص IP، **checkpoint** ذخیره می‌کند
+- در صورت قطع برنامه، می‌شود ادامه داد
+- اگر کاربر انصراف بدهد، نتیجه همان لحظه هدر نمی‌رود
 
-That matters in difficult networks: if many Cloudflare edges are blocked or unstable, a deeper
-full scan can still reach farther into the catalog instead of getting stuck near the top of the
-file.
-
-If you want an even longer hunt, raise these from **Scan Settings**:
-
-- `Max candidates (full scan)`
-- `Eligibility rounds`
-- `Tunnel finalists`
-- `Tunnel rounds`
-
-Or use **Hard Deep Scan** for a checkpointed sequential sweep.
+این حالت مناسب زمانی است که:
+- دسترسی به IPهای سالم سخت شده
+- فیلترینگ شدید است
+- می‌خواهی بخش بزرگی از رنج‌ها را واقعاً جارو کنی
 
 ---
 
-## How the ranking works
+#### 4) Resume Hard Scan
+ادامه دادن آخرین Hard Scan از همان جایی که متوقف شده.
 
-| Stage | What is measured | Used for ranking |
-| --- | --- | --- |
-| Eligibility | Real WebSocket upgrade (HTTP 101) against each candidate edge IP, `cf-ray` presence, success rate across interleaved rounds | Yes (15%) |
-| TCP connect | Connect time | **No** — diagnostics only |
-| Browsing | Cold page load, warm page load on a reused connection, TTFB p90, sub-resource success rate, timing stability (MAD) | Yes (45%) |
-| Streaming | HLS manifest parsing, **sequential** segment downloads, startup delay, simulated player buffer, stall count, rebuffer ratio, P10 sustainable throughput | Yes (40%) |
-
-Every candidate is measured once per round in a shuffled order, so a passing network hiccup
-hits all candidates equally instead of unfairly punishing one IP.
-
-Streaming throughput is reported as the **10th percentile divided by a safety factor**, which
-is the bitrate a player can rely on, not the peak burst a speed test would show.
-
-Candidates that only pass the eligibility phase but never produce browsing or streaming data are
-kept in the report, but they do **not** receive an overall QoE score.
-
-Full details: [docs/METHODOLOGY.md](docs/METHODOLOGY.md)
+سناریوهای رایج:
+- قطع برق / نت
+- بسته شدن برنامه
+- کرش
+- انصراف دستی کاربر
 
 ---
 
-## Command line
+#### 5) VLESS Configuration
+برای وارد کردن، دیدن یا حذف کانفیگ VLESS.
 
-The menu is the main interface, but every action is scriptable:
+اولین کاری که باید انجام بدهی همین است.
+
+---
+
+#### 6) Workload Settings
+مشخص می‌کند اسکنر **با چه سناریوی واقعی** کیفیت IPها را بسنجد.
+
+یعنی:
+- برای مرور وب کدام صفحه باز شود
+- برای استریم کدام ویدیو معیار باشد
+
+##### Built-in browsing workloads
+- `wikipedia`
+- `cloudflare-docs`
+- `cloudflare-speed`
+
+##### Built-in streaming workloads
+- `apple-bipbop`
+- `bitmovin-sintel`
+- `mux-test-hls`
+
+##### نکته مهم
+پیش‌فرض‌ها عمداً طوری انتخاب شده‌اند که **فقط روی دارایی‌های Cloudflare تکیه نکنند** و تست طبیعی‌تر باشد.
+
+##### چرا YouTube پیش‌فرض نیست؟
+یوتیوب برای benchmark پایدار گزینه خوبی نیست، چون:
+- لینک HLS عمومی و ثابت مناسب ندارد
+- محدودیت/توکن/expiry دارد
+- ممکن است نتیجه ناپایدار و غیرقابل‌تکرار شود
+
+برای همین از استریم‌های عمومی HLS استفاده شده که برای تست فنی قابل‌اعتمادترند.
+
+---
+
+#### 7) System Check
+چک می‌کند:
+- Node.js درست نصب است یا نه
+- Xray پیدا می‌شود یا نه
+- فایل‌های تنظیمات وضعیت مناسبی دارند یا نه
+- Resume state موجود است یا نه
+
+---
+
+#### 8) Best IPs
+بهترین نتایج آخرین اسکن را نشان می‌دهد.
+
+---
+
+#### 9) Previous Results
+لیست گزارش‌های قبلی را نشان می‌دهد.
+
+---
+
+#### 10) Diagnostics
+خلاصه‌ای از آخرین لاگ را نشان می‌دهد تا اگر جایی مشکل بود سریع‌تر پیدا شود.
+
+---
+
+#### 11) Scan Settings
+تنظیمات عددی و مهم پروژه را به‌شکل یوزرفرندلی تغییر می‌دهد.
+
+مثل:
+- تعداد candidateها
+- تعداد roundها
+- تعداد فینالیست‌های تونل
+- تعداد segmentهای استریم
+- تنظیمات Hard Scan
+- سطح لاگ
+
+---
+
+## روند استفاده پیشنهادی
+
+اگر بار اول است:
+
+1. وارد `VLESS Configuration` شو
+2. لینک `vless://...` را paste کن
+3. `System Check` را اجرا کن
+4. اول `Quick Scan` بزن
+5. اگر نتیجه خوب بود، `Full Scan` بزن
+6. اگر شرایط خیلی سخت بود، از `Hard Deep Scan` استفاده کن
+
+---
+
+## معیارهای واقعی تست
+
+## 1) Eligibility
+اول بررسی می‌شود که آیا IP کلاً برای کانفیگ تو جواب می‌دهد یا نه.
+
+کارهایی که انجام می‌شود:
+- اتصال به IP کاندید
+- اجرای **WebSocket Upgrade واقعی**
+- استفاده از `host`، `path`، `port` واقعی کانفیگ تو
+- بررسی پاسخ `HTTP 101`
+- بررسی نشانه‌هایی مثل `cf-ray`
+
+### نکته
+**TCP connect** فقط برای دیباگ است و معیار اصلی رتبه‌بندی نیست.
+
+---
+
+## 2) Browsing
+اگر IP از مرحله بالا عبور کند، تونل واقعی با Xray بالا می‌آید و بعد تجربه مرور سنجیده می‌شود.
+
+### معیارهای browsing
+- **Cold page load**
+- **Warm page load**
+- **TTFB p90**
+- **Success rate منابع صفحه**
+- **Stability / MAD**
+
+### وزن browsing
+- موفقیت منابع: **40%**
+- cold load: **15%**
+- warm load: **20%**
+- TTFB p90: **15%**
+- پایداری: **10%**
+
+---
+
+## 3) Streaming
+بعد از آن تجربه استریم واقعی بررسی می‌شود.
+
+### کارهایی که انجام می‌شود
+- خواندن manifest واقعی HLS
+- دانلود **ترتیبی** segmentها
+- شبیه‌سازی رفتار player
+- بررسی startup و buffer
+
+### معیارهای streaming
+- success rate segmentها
+- startup delay
+- rebuffer ratio
+- sustainable bitrate
+
+### وزن streaming
+- success rate: **35%**
+- startup delay: **15%**
+- rebuffer ratio: **30%**
+- sustainable bitrate: **20%**
+
+---
+
+## امتیاز نهایی
+امتیاز کلی به این صورت ساخته می‌شود:
+
+- **Browsing:** 45%
+- **Streaming:** 40%
+- **Reliability:** 15%
+
+### نکته مهم
+اگر یک IP فقط eligibility را پاس کند ولی browsing/streaming واقعی نداشته باشد،
+**overall score واقعی نمی‌گیرد** تا نتیجه گمراه‌کننده نباشد.
+
+---
+
+## دقت نتایج چقدر به واقعیت نزدیک است؟
+
+### خیلی نزدیک‌تر از اسکنرهای معمولی
+چون این پروژه بر اساس این‌ها قضاوت می‌کند:
+- WebSocket واقعی
+- تونل واقعی Xray
+- درخواست HTTP واقعی از داخل تونل
+- استریم واقعی HLS
+- دانلود ترتیبی segmentها
+- محاسبه startup / stall / rebuffer
+
+### ولی 100% مطلق نیست
+چون تجربه واقعی به این‌ها هم بستگی دارد:
+- ISP تو
+- زمان تست
+- workload انتخابی
+- نوع سایتی که واقعاً استفاده می‌کنی
+- نوع استریمی که واقعاً می‌بینی
+
+### نتیجه عملی
+برای **مقایسه بین IPها در شرایط واقعی همان لحظه**، این پروژه بسیار دقیق‌تر از روش‌های مبتنی بر ping و speedtest مصنوعی است.
+
+---
+
+## چرا Workload سفارشی مهم است؟
+
+اگر می‌خواهی نتیجه برای استفاده واقعی تو دقیق‌تر شود:
+
+### برای browsing
+یک صفحه واقعی اضافه کن:
+- سایت خودت
+- پنل خودت
+- صفحه‌ای که زیاد استفاده می‌کنی
+
+### برای streaming
+اگر به manifest `.m3u8` مناسب دسترسی داری، آن را به‌عنوان custom stream اضافه کن.
+
+هرچه workload به مصرف واقعی تو نزدیک‌تر باشد، ranking هم واقعی‌تر می‌شود.
+
+---
+
+## Range Catalog و منطق اسکن
+
+پروژه از یک **لیست وسیع و توسعه‌داده‌شده از رنج‌های IPv4 مربوط به کلودفلر** استفاده می‌کند.
+
+### Full Scan
+در Full Scan انتخاب IPها به‌صورت **shuffled round-robin** انجام می‌شود تا:
+- پوشش رنج‌ها بهتر پخش شود
+- رنج‌های پایین فایل نادیده گرفته نشوند
+- در لیست‌های بزرگ، bias کمتر شود
+
+### Hard Deep Scan
+در Hard mode پروژه:
+- رندوم انتخاب نمی‌کند
+- از رنج‌ها به‌شکل ترتیبی جلو می‌رود
+- برای جستجوی عمیق طراحی شده
+
+---
+
+## توقف امن و ادامه اسکن
+
+در Hard Deep Scan:
+- با **Q**
+- یا **Ctrl + C**
+
+می‌توانی اسکن را امن متوقف کنی.
+
+در این حالت:
+- نتیجه تا آن لحظه ذخیره می‌شود
+- گزارش موقت ساخته می‌شود
+- بعداً با `Resume Hard Scan` ادامه می‌دهی
+
+---
+
+## فایل‌های خروجی
+
+```text
+results/run-<id>.json          گزارش کامل همان اجرا
+results/latest.json            آخرین گزارش
+results/best-ips.txt           لیست مرتب بهترین IPها
+logs/run-<id>.ndjson           لاگ ساخت‌یافته
+results/hard-scan/*            فایل‌های checkpoint در اسکن سنگین
+```
+
+---
+
+## حریم خصوصی و امنیت
+
+- لینک `vless://` فقط در فایل محلی ذخیره می‌شود
+- URI و UUID و داده‌های حساس در لاگ‌ها **redact** می‌شوند
+- لاگ‌ها و نتایج روی سیستم خود کاربر می‌مانند
+- چیزی به جایی upload نمی‌شود
+- فایل‌های موقت Xray بعد از پایان کار حذف می‌شوند
+
+> با این حال، اگر کانفیگ واقعی‌ات را جایی share کردی، بهتر است بعداً آن UUID/URI را عوض کنی.
+
+---
+
+## اجرای خط فرمان
 
 ```bash
-cfqoe                       # interactive menu
-cfqoe import "vless://..."  # store your configuration locally
-cfqoe quick                 # reduced scan
-cfqoe scan --max 60 --tunnel-limit 8 --segments 4
-cfqoe hard                  # sequential resumable deep scan
-cfqoe resume                # continue the last hard scan
-cfqoe scan --no-streaming --debug
-cfqoe check                 # environment check
-cfqoe results               # latest ranking
-cfqoe diagnose              # summarize the newest log
-npm run xray:install        # fetch the official Xray binary into ./xray
-```
-
-On Windows replace `cfqoe` with `node bin\cfqoe.js`.
-
-| Option | Meaning |
-| --- | --- |
-| `--max N` | maximum candidate IPs |
-| `--rounds N` | eligibility rounds |
-| `--tunnel-limit N` | how many candidates go through the real tunnel |
-| `--tunnel-rounds N` | observations per candidate |
-| `--segments N` | streaming segments per observation |
-| `--no-tunnel` / `--no-browsing` / `--no-streaming` | skip a stage |
-| `--xray-path PATH` | explicit Xray executable |
-| `--debug` | verbose structured logging |
-
----
-
-## Workloads
-
-Built-in defaults now use a public non-Cloudflare page and a public non-Cloudflare HLS stream.
-From menu option **6** you can toggle other built-ins or add your own:
-
-- a **page URL** for browsing tests
-- an **`.m3u8` manifest** for streaming tests
-
-Custom workloads are saved in `data/settings.json` and reused on every run.
-
----
-
-## Output
-
-```
-results/run-<id>.json   full structured report (schema 5)
-results/latest.json     the most recent report
-results/best-ips.txt    plain tab-separated ranking
-logs/run-<id>.ndjson    structured event log
-```
-
-`best-ips.txt` example:
-
-```
-IP              Overall  Browsing  Streaming  Reliability  Quality
-104.18.23.11    91.4     93.2      89.0       100          1080p
-172.67.8.204    84.7     88.1      79.6       100          720p
+cfqoe                       # اجرای منوی تعاملی
+cfqoe import "vless://..."  # ذخیره کانفیگ
+cfqoe quick                 # اسکن سریع
+cfqoe scan                  # فول اسکن
+cfqoe hard                  # اسکن ترتیبی و قابل ادامه
+cfqoe resume                # ادامه آخرین hard scan
+cfqoe check                 # بررسی وضعیت محیط
+cfqoe results               # نمایش آخرین نتایج
+cfqoe diagnose              # خلاصه لاگ
+npm run xray:install        # نصب دستی Xray
 ```
 
 ---
 
-## Privacy and safety
+## برای کاربران تازه‌کار
 
-- Your `vless://` link is stored **only** in `data/config.secret.uri`, with `0600` permissions on
-  Linux and a restricted ACL on Windows.
-- The URI, the UUID, and any password-like value are redacted from every log line and never
-  appear in reports.
-- Temporary Xray configs are written to a `0700` temporary directory, deleted immediately after
-  each candidate, and every Xray process is stopped with SIGTERM and force-killed if needed.
-- Nothing is uploaded anywhere. All measurements stay on your machine.
+اگر نمی‌دانی از کجا شروع کنی:
 
----
-
-## Testing
-
-```bash
-npm test
-```
-
-The suite is fully offline: local HTTP servers, a local SOCKS5 server, a fake HLS origin, a fake
-edge that performs a WebSocket upgrade, and a fake Xray binary. No internet access is needed.
+1. پروژه را دانلود کن
+2. اجرا کن
+3. گزینه `5` را باز کن و کانفیگ VLESS را وارد کن
+4. گزینه `7` را بزن برای چک اولیه
+5. گزینه `1` را بزن برای Quick Scan
+6. بعد از آن `8` را ببین
+7. اگر خواستی دقیق‌تر شوی، `2` یا `3` را اجرا کن
 
 ---
 
-## License
+## هدف نهایی پروژه
+
+این ابزار قرار نیست صرفاً «سریع‌ترین IP روی کاغذ» را پیدا کند.
+هدفش این است که برای **استفاده واقعی کاربر**، IPهایی را پیدا کند که:
+
+- بهتر وصل می‌شوند
+- بهتر صفحه را باز می‌کنند
+- بهتر استریم را نگه می‌دارند
+- پایدارتر هستند
+
+و این دقیقاً همان چیزی است که در عمل مهم‌تر از پینگ خام است.
+
+---
+
+## لایسنس
 
 MIT

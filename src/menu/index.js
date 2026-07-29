@@ -35,7 +35,6 @@ async function waitForReturn(rl) {
 export async function runMenu() {
   const layout = ensureDirectories();
   const rl = readline.createInterface({ input, output });
-
   try {
     for (;;) {
       const settings = loadSettings(layout.settingsFile);
@@ -45,7 +44,6 @@ export async function runMenu() {
       console.log(MENU);
       const choice = (await rl.question('  Select an option: ')).trim();
       if (choice === '0' || choice.toLowerCase() === 'q') break;
-
       try {
         await handleChoice(choice, { rl, layout, settings });
       } catch (error) {
@@ -92,7 +90,6 @@ async function handleChoice(choice, context) {
   }
 }
 
-// Fast triage. Confidence labels in the report stay low on purpose.
 export function quickProfile(settings) {
   return {
     ...settings,
@@ -104,7 +101,6 @@ export function quickProfile(settings) {
   };
 }
 
-// Slow profile intended for defensible numbers rather than a quick answer.
 export function researchProfile(settings) {
   return {
     ...settings,
@@ -131,7 +127,6 @@ async function startScan({ layout, settings }, mode) {
   const logger = createLogger({ level: settings.logging.level, directory: layout.logs });
   const title = mode === 'quick' ? 'Quick scan' : mode === 'research' ? 'Research scan' : 'Full scan';
   console.log(`\n  ${color.bold(title)} started. Run id: ${logger.runId}\n`);
-
   try {
     const result = await runScan({
       vlessUri: uri,
@@ -147,6 +142,7 @@ async function startScan({ layout, settings }, mode) {
       if (result.xray.reason === 'xray_not_found') console.log(`  ${color.dim(xrayInstallHint())}`);
     }
     console.log(`  ${color.green('Scan complete.')} Eligible IPs: ${result.eligibleCount}`);
+    console.log(`  QoE evidence: ${result.report.totals.complete} complete, ${result.report.totals.partial || 0} partial, ${result.report.totals.unmeasured || 0} eligibility-only`);
     console.log(`  Random sample: ${result.candidateCount} IPs across a ${result.rangeCount}-range catalog`);
     console.log(`  Sampling seed: ${result.samplingSeed}`);
     console.log(`  Report: ${result.jsonPath}`);
@@ -171,7 +167,6 @@ async function startHard({ rl, layout, settings }, resume) {
   console.log(`\n  ${color.bold(resume ? 'Resuming hard scan' : 'Hard deep scan')} started. Run id: ${logger.runId}`);
   console.log(`  ${color.dim(`Parallel sweep: ${settings.hard.concurrency} IPs at once, ${settings.hard.screeningRounds} fast screening round(s).`)}`);
   console.log(`  ${color.dim('Transient failures are retried later; finalists are verified adaptively. Press Q or Ctrl+C to stop safely.')}\n`);
-
   try {
     const result = await runHardScan({
       vlessUri: uri,
@@ -185,6 +180,7 @@ async function startHard({ rl, layout, settings }, resume) {
     clearProgress();
     console.log(result.canceled ? `  ${color.yellow('Hard scan paused safely.')}` : `  ${color.green('Hard scan completed.')}`);
     console.log(`  Eligible IPs so far: ${result.eligibleCount}`);
+    console.log(`  QoE evidence: ${result.report.totals.complete || 0} complete, ${result.report.totals.partial || 0} partial`);
     console.log(`  Report: ${result.jsonPath}`);
     printTop(result.report.results);
   } finally {
@@ -194,7 +190,7 @@ async function startHard({ rl, layout, settings }, resume) {
 }
 
 function printTop(results, limit = 10) {
-  const narrow = terminalWidth() < 100;
+  const narrow = terminalWidth() < 120;
   const rows = results.slice(0, limit).map((item) => {
     const base = [
       item.ip,
@@ -202,6 +198,7 @@ function printTop(results, limit = 10) {
       item.scores.conservative ?? '-',
       `${Math.round((item.eligibility.successRate || 0) * 100)}%`,
       item.eligibility.confidence || '-',
+      item.measurement?.status || '-',
     ];
     return narrow ? base : [
       ...base,
@@ -209,6 +206,11 @@ function printTop(results, limit = 10) {
       item.scores.streaming ?? '-',
       item.eligibility.pops?.dominant || '-',
       item.streaming?.quality || '-',
+      item.verdict?.label || '-',
+      item.load?.sustainedMbps ?? '-',
+      item.load?.rpm ?? '-',
+      item.gates?.limiting || item.measurement?.missingComponents?.join(',') || '-',
+      item.measurement?.bytesMeasured ? `${Math.round(item.measurement.bytesMeasured / (1024 * 1024))}MB` : '-',
     ];
   });
   if (rows.length === 0) {
@@ -216,10 +218,10 @@ function printTop(results, limit = 10) {
     return;
   }
   const headers = narrow
-    ? ['IP', 'Overall', 'Conserv', 'Success', 'Confidence']
-    : ['IP', 'Overall', 'Conserv', 'Success', 'Confidence', 'Transfer', 'Stream', 'POP', 'Quality'];
+    ? ['IP', 'Overall', 'Conserv', 'Success', 'Confidence', 'Evidence']
+    : ['IP', 'Overall', 'Conserv', 'Success', 'Confidence', 'Evidence', 'Transfer', 'Stream', 'POP', 'Quality', 'Verdict', 'Mbps', 'RPM', 'Why', 'Traffic'];
   console.log(`\n${table(rows, headers)}\n`);
-  console.log(`  ${color.dim('Ranks are run-relative; confidence reflects sample size and stability over time.')}\n`);
+  console.log(`  ${color.dim('Measured candidates rank above eligibility-only rows. Partial scores are capped at 70 and list missing components.')}\n`);
 }
 
 async function manageConfig({ rl, layout }) {
@@ -260,7 +262,6 @@ async function manageWorkloads({ rl, layout, settings }) {
   console.log('\n  1) Toggle transfer   2) Toggle streaming   3) Add custom page   4) Add custom stream   0) Back');
   const action = (await rl.question('  Choose: ')).trim().toLowerCase();
   const next = { ...settings };
-
   if (action === '1' || action === '2') {
     const kind = action === '1' ? 'browsing' : 'streaming';
     const name = (await rl.question('  Workload name to toggle: ')).trim();
@@ -279,7 +280,6 @@ async function manageWorkloads({ rl, layout, settings }) {
     new URL(manifestUrl);
     next.customWorkloads = { ...next.customWorkloads, streaming: [...next.customWorkloads.streaming, { name, manifestUrl, segmentDurationSec: 6 }] };
   } else return;
-
   saveSettings(layout.settingsFile, next);
   console.log(`  ${color.green('Settings saved.')}`);
 }
@@ -369,11 +369,13 @@ async function advancedSettings({ rl, layout, settings }) {
     { label: 'Streaming research segments', group: 'streaming', field: 'researchSegments' },
     { label: 'Streaming variant mode', group: 'streaming', field: 'variantMode', values: ['fixed', 'abr'] },
     { label: 'Transfer asset limit', group: 'browsing', field: 'assetLimit' },
-    { label: 'Real-load stage enabled', group: 'load', field: 'enabled', values: ['true', 'false'] },
+    { label: 'Real-load stage enabled', group: 'load', field: 'enabled', values: ['true', 'false'], boolean: true },
     { label: 'Real-load duration (ms)', group: 'load', field: 'durationMs' },
     { label: 'Real-load chunk size (bytes)', group: 'load', field: 'chunkBytes' },
     { label: 'Real-load upload size (bytes)', group: 'load', field: 'uploadBytes' },
     { label: 'Real-load parallel requests', group: 'load', field: 'fanoutRequests' },
+    { label: 'Real-load parallel download flows', group: 'load', field: 'flows' },
+    { label: 'Real-load parallel upload flows', group: 'load', field: 'uploadFlows' },
     { label: 'Real-load minimum bytes', group: 'load', field: 'minBytes' },
     { label: 'Hard concurrent IPs', group: 'hard', field: 'concurrency' },
     { label: 'Hard screening rounds', group: 'hard', field: 'screeningRounds' },
@@ -384,7 +386,6 @@ async function advancedSettings({ rl, layout, settings }) {
     { label: 'Hard final top count', group: 'hard', field: 'finalTop' },
     { label: 'Log level', group: 'logging', field: 'level', values: ['debug', 'info', 'warn', 'error'] },
   ];
-
   for (;;) {
     const rows = fields.map((item, index) => [String(index + 1), item.label, String(settings[item.group][item.field])]);
     console.log(`\n${table(rows, ['#', 'Setting', 'Value'])}`);
@@ -403,15 +404,13 @@ async function advancedSettings({ rl, layout, settings }) {
       continue;
     }
     const current = settings[selected.group][selected.field];
-    const prompt = selected.values
-      ? `  New value (${selected.values.join('/')}), current ${current}: `
-      : `  New value, current ${current}: `;
+    const prompt = selected.values ? `  New value (${selected.values.join('/')}), current ${current}: ` : `  New value, current ${current}: `;
     const raw = (await rl.question(prompt)).trim();
     if (raw.length === 0) continue;
     const next = { ...settings, [selected.group]: { ...settings[selected.group] } };
     if (selected.values) {
       if (!selected.values.includes(raw)) throw new Error(`Allowed values: ${selected.values.join(', ')}`);
-      next[selected.group][selected.field] = raw;
+      next[selected.group][selected.field] = selected.boolean ? raw === 'true' : raw;
     } else {
       const numeric = Number(raw);
       if (!Number.isFinite(numeric) || numeric <= 0) throw new Error('Value must be a positive number');

@@ -8,7 +8,7 @@ export const color = {
 export function banner() {
   return [
     color.blue('+--------------------------------------------+'),
-    `${color.blue('|')}      ${color.bold('CFQoE Cloudflare IP Scanner')}  v0.8.0   ${color.blue('|')}`,
+    `${color.blue('|')}      ${color.bold('CFQoE Cloudflare IP Scanner')}  v0.8.1   ${color.blue('|')}`,
     `${color.blue('|')}  ${color.dim('Real-load measurement with absolute gates')}  ${color.blue('|')}`,
     color.blue('+--------------------------------------------+'),
   ].join('\n');

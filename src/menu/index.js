@@ -12,17 +12,18 @@ import { runScan } from '../scan.js';
 import { runHardScan, hasHardScanState } from '../hard-scan.js';
 
 const MENU = `
-  ${color.bold('1')}. Quick Scan            ${color.dim('fresh random sample, small and fast')}
-  ${color.bold('2')}. Full Scan             ${color.dim('fresh wider sample and more rounds')}
-  ${color.bold('3')}. Hard Deep Scan        ${color.dim('parallel one-IP-per-range sweep, resumable')}
-  ${color.bold('4')}. Resume Hard Scan      ${color.dim('continue the last deep sweep')}
-  ${color.bold('5')}. VLESS Configuration   ${color.dim('import, inspect or remove your config')}
-  ${color.bold('6')}. Workload Settings     ${color.dim('choose or add browsing and streaming targets')}
-  ${color.bold('7')}. System Check          ${color.dim('verify Node, Xray and file protection')}
-  ${color.bold('8')}. Best IPs              ${color.dim('show the latest ranking')}
-  ${color.bold('9')}. Previous Results      ${color.dim('list saved reports')}
-  ${color.bold('10')}. Diagnostics          ${color.dim('summarize the newest log file')}
-  ${color.bold('11')}. Scan Settings        ${color.dim('edit numbers with a friendly picker')}
+  ${color.bold('1')}. Quick Scan            ${color.dim('fast screening, low confidence labels')}
+  ${color.bold('2')}. Full Scan             ${color.dim('wider sample with independent verification')}
+  ${color.bold('3')}. Research Scan         ${color.dim('slow, high-confidence measurement profile')}
+  ${color.bold('4')}. Hard Deep Scan        ${color.dim('parallel one-IP-per-range sweep, resumable')}
+  ${color.bold('5')}. Resume Hard Scan      ${color.dim('continue the last deep sweep')}
+  ${color.bold('6')}. VLESS Configuration   ${color.dim('import, inspect or remove your config')}
+  ${color.bold('7')}. Workload Settings     ${color.dim('choose or add transfer and streaming targets')}
+  ${color.bold('8')}. System Check          ${color.dim('verify Node, Xray and file protection')}
+  ${color.bold('9')}. Best IPs              ${color.dim('show the latest ranking with confidence')}
+  ${color.bold('10')}. Previous Results     ${color.dim('list saved reports')}
+  ${color.bold('11')}. Diagnostics          ${color.dim('summarize the newest log file')}
+  ${color.bold('12')}. Scan Settings        ${color.dim('edit measurement and verification numbers')}
   ${color.bold('0')}. Exit
 `;
 
@@ -65,6 +66,7 @@ function statusLine(layout, settings) {
   return `  ${[
     hasConfig ? color.green('config: ready') : color.yellow('config: missing'),
     xray.found ? color.green('xray: found') : color.yellow('xray: missing'),
+    settings.verification.enabled ? color.green('verify: sprt') : color.yellow('verify: off'),
     hasHardScanState(layout) ? color.yellow('resume: available') : color.dim('resume: none'),
     color.dim(`platform: ${process.platform}-${process.arch}`),
   ].join('   ')}`;
@@ -74,40 +76,61 @@ async function handleChoice(choice, context) {
   switch (choice) {
     case '1': return startScan(context, 'quick');
     case '2': return startScan(context, 'full');
-    case '3': return startHard(context, false);
-    case '4': return startHard(context, true);
-    case '5': return manageConfig(context);
-    case '6': return manageWorkloads(context);
-    case '7': return systemCheck(context);
-    case '8': return showBestIps(context);
-    case '9': return listResults(context);
-    case '10': return diagnostics(context);
-    case '11': return advancedSettings(context);
+    case '3': return startScan(context, 'research');
+    case '4': return startHard(context, false);
+    case '5': return startHard(context, true);
+    case '6': return manageConfig(context);
+    case '7': return manageWorkloads(context);
+    case '8': return systemCheck(context);
+    case '9': return showBestIps(context);
+    case '10': return listResults(context);
+    case '11': return diagnostics(context);
+    case '12': return advancedSettings(context);
     default:
       console.log(`\n  ${color.yellow('Unknown option.')}`);
       return undefined;
   }
 }
 
+// Fast triage. Confidence labels in the report stay low on purpose.
 export function quickProfile(settings) {
   return {
     ...settings,
     scan: { ...settings.scan, perRange: 2, maxCandidates: 16, rounds: 2, concurrency: Math.min(10, settings.scan.concurrency) },
+    verification: { ...settings.verification, limit: Math.min(6, settings.verification.limit) },
     tunnel: { ...settings.tunnel, limit: 3, rounds: 1 },
-    streaming: { ...settings.streaming, maxSegments: 2 },
+    streaming: { ...settings.streaming, maxSegments: settings.streaming.quickSegments ?? 3 },
     browsing: { ...settings.browsing, assetLimit: 4 },
+  };
+}
+
+// Slow profile intended for defensible numbers rather than a quick answer.
+export function researchProfile(settings) {
+  return {
+    ...settings,
+    scan: { ...settings.scan, perRange: 4, maxCandidates: Math.max(240, settings.scan.maxCandidates), rounds: Math.max(6, settings.scan.rounds) },
+    verification: {
+      ...settings.verification,
+      enabled: true,
+      limit: Math.max(24, settings.verification.limit),
+      sprt: { ...settings.verification.sprt, minRounds: 4, maxRounds: 24 },
+    },
+    tunnel: { ...settings.tunnel, limit: Math.max(8, settings.tunnel.limit), rounds: Math.max(3, settings.tunnel.rounds) },
+    streaming: { ...settings.streaming, maxSegments: settings.streaming.researchSegments ?? 29 },
+    browsing: { ...settings.browsing, assetLimit: Math.max(8, settings.browsing.assetLimit) },
   };
 }
 
 async function startScan({ layout, settings }, mode) {
   if (!fs.existsSync(layout.secretFile)) {
-    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 5).')}`);
+    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 6).')}`);
     return;
   }
-  const effective = mode === 'quick' ? quickProfile(settings) : settings;
+  const effective = mode === 'quick' ? quickProfile(settings) : mode === 'research' ? researchProfile(settings) : settings;
   const uri = readSecretFile(layout.secretFile);
   const logger = createLogger({ level: settings.logging.level, directory: layout.logs });
-  console.log(`\n  ${color.bold(mode === 'quick' ? 'Quick scan' : 'Full scan')} started. Run id: ${logger.runId}\n`);
+  const title = mode === 'quick' ? 'Quick scan' : mode === 'research' ? 'Research scan' : 'Full scan';
+  console.log(`\n  ${color.bold(title)} started. Run id: ${logger.runId}\n`);
 
   try {
     const result = await runScan({
@@ -135,7 +158,7 @@ async function startScan({ layout, settings }, mode) {
 
 async function startHard({ rl, layout, settings }, resume) {
   if (!fs.existsSync(layout.secretFile)) {
-    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 5).')}`);
+    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 6).')}`);
     return;
   }
   if (resume && !hasHardScanState(layout)) {
@@ -147,7 +170,7 @@ async function startHard({ rl, layout, settings }, resume) {
   rl.pause();
   console.log(`\n  ${color.bold(resume ? 'Resuming hard scan' : 'Hard deep scan')} started. Run id: ${logger.runId}`);
   console.log(`  ${color.dim(`Parallel sweep: ${settings.hard.concurrency} IPs at once, ${settings.hard.screeningRounds} fast screening round(s).`)}`);
-  console.log(`  ${color.dim('Selection still takes one IP from every range per pass. Press Q or Ctrl+C to stop safely.')}\n`);
+  console.log(`  ${color.dim('Transient failures are retried later; finalists are verified adaptively. Press Q or Ctrl+C to stop safely.')}\n`);
 
   try {
     const result = await runHardScan({
@@ -171,15 +194,32 @@ async function startHard({ rl, layout, settings }, resume) {
 }
 
 function printTop(results, limit = 10) {
-  const rows = results.slice(0, limit).map((item) => [
-    item.ip, item.scores.overall ?? '-', item.scores.browsing ?? '-', item.scores.streaming ?? '-',
-    `${Math.round((item.eligibility.successRate || 0) * 100)}%`, item.streaming?.quality || '-',
-  ]);
+  const narrow = terminalWidth() < 100;
+  const rows = results.slice(0, limit).map((item) => {
+    const base = [
+      item.ip,
+      item.scores.overall ?? '-',
+      item.scores.conservative ?? '-',
+      `${Math.round((item.eligibility.successRate || 0) * 100)}%`,
+      item.eligibility.confidence || '-',
+    ];
+    return narrow ? base : [
+      ...base,
+      item.scores.browsing ?? '-',
+      item.scores.streaming ?? '-',
+      item.eligibility.pops?.dominant || '-',
+      item.streaming?.quality || '-',
+    ];
+  });
   if (rows.length === 0) {
     console.log(`\n  ${color.yellow('No candidates were measured.')}`);
     return;
   }
-  console.log(`\n${table(rows, ['IP', 'Overall', 'Browse', 'Stream', 'Success', 'Quality'])}\n`);
+  const headers = narrow
+    ? ['IP', 'Overall', 'Conserv', 'Success', 'Confidence']
+    : ['IP', 'Overall', 'Conserv', 'Success', 'Confidence', 'Transfer', 'Stream', 'POP', 'Quality'];
+  console.log(`\n${table(rows, headers)}\n`);
+  console.log(`  ${color.dim('Ranks are run-relative; confidence reflects sample size and stability over time.')}\n`);
 }
 
 async function manageConfig({ rl, layout }) {
@@ -207,7 +247,7 @@ async function manageConfig({ rl, layout }) {
 
 async function manageWorkloads({ rl, layout, settings }) {
   const catalog = loadCatalog(layout.workloadsFile);
-  console.log(`\n  ${color.bold('Built-in browsing workloads')}`);
+  console.log(`\n  ${color.bold('Built-in web transfer workloads')}`);
   catalog.browsing.forEach((item, index) => {
     const active = settings.browsing.workloads.includes(item.name) ? color.green('[x]') : '[ ]';
     console.log(`   ${active} ${index + 1}. ${item.name} - ${item.description}`);
@@ -217,7 +257,7 @@ async function manageWorkloads({ rl, layout, settings }) {
     const active = settings.streaming.workloads.includes(item.name) ? color.green('[x]') : '[ ]';
     console.log(`   ${active} ${index + 1}. ${item.name} - ${item.description}`);
   });
-  console.log('\n  1) Toggle browsing   2) Toggle streaming   3) Add custom page   4) Add custom stream   0) Back');
+  console.log('\n  1) Toggle transfer   2) Toggle streaming   3) Add custom page   4) Add custom stream   0) Back');
   const action = (await rl.question('  Choose: ')).trim().toLowerCase();
   const next = { ...settings };
 
@@ -252,6 +292,8 @@ async function systemCheck({ layout, settings }) {
     ['Platform', `${process.platform}-${process.arch}`, platformStatus],
     ['Config file', fs.existsSync(layout.secretFile) ? 'present' : 'missing', fileIsProtected(layout.secretFile) ? 'protected' : 'unprotected'],
     ['Results dir', layout.results, fs.existsSync(layout.results) ? 'ok' : 'missing'],
+    ['Verification', settings.verification.enabled ? 'SPRT enabled' : 'disabled', `p0 ${settings.verification.sprt.p0} / p1 ${settings.verification.sprt.p1}`],
+    ['Delayed retry', settings.hard.delayedRetry ? 'enabled' : 'disabled', `limit ${settings.hard.retryLimit}`],
     ['Hard resume', hasHardScanState(layout) ? 'available' : 'none', layout.hardStateFile],
   ];
   if (located.found) {
@@ -320,13 +362,17 @@ async function advancedSettings({ rl, layout, settings }) {
     { label: 'Eligibility rounds', group: 'scan', field: 'rounds' },
     { label: 'Eligibility concurrency', group: 'scan', field: 'concurrency' },
     { label: 'Successful threshold', group: 'scan', field: 'minimumSuccessRate' },
+    { label: 'Verification finalists', group: 'verification', field: 'limit' },
     { label: 'Tunnel finalists', group: 'tunnel', field: 'limit' },
     { label: 'Tunnel rounds', group: 'tunnel', field: 'rounds' },
     { label: 'Streaming segments', group: 'streaming', field: 'maxSegments' },
-    { label: 'Browsing asset limit', group: 'browsing', field: 'assetLimit' },
+    { label: 'Streaming research segments', group: 'streaming', field: 'researchSegments' },
+    { label: 'Streaming variant mode', group: 'streaming', field: 'variantMode', values: ['fixed', 'abr'] },
+    { label: 'Transfer asset limit', group: 'browsing', field: 'assetLimit' },
     { label: 'Hard concurrent IPs', group: 'hard', field: 'concurrency' },
     { label: 'Hard screening rounds', group: 'hard', field: 'screeningRounds' },
-    { label: 'Hard finalist recheck count', group: 'hard', field: 'recheckTop' },
+    { label: 'Hard finalist verification count', group: 'hard', field: 'recheckTop' },
+    { label: 'Hard retry limit', group: 'hard', field: 'retryLimit' },
     { label: 'Hard-save every N IPs', group: 'hard', field: 'saveEvery' },
     { label: 'Hard live top count', group: 'hard', field: 'liveTop' },
     { label: 'Hard final top count', group: 'hard', field: 'finalTop' },
@@ -336,7 +382,7 @@ async function advancedSettings({ rl, layout, settings }) {
   for (;;) {
     const rows = fields.map((item, index) => [String(index + 1), item.label, String(settings[item.group][item.field])]);
     console.log(`\n${table(rows, ['#', 'Setting', 'Value'])}`);
-    console.log(`\n  0) Back   d) Restore defaults`);
+    console.log('\n  0) Back   d) Restore defaults');
     const choice = (await rl.question('  Choose a setting: ')).trim().toLowerCase();
     if (choice === '0' || choice.length === 0) return;
     if (choice === 'd') {

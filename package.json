@@ -1,7 +1,7 @@
 {
   "name": "cfqoe-scanner",
-  "version": "0.5.0",
-  "description": "Portable Cloudflare edge quality scanner ranked by real browsing and streaming QoE",
+  "version": "0.6.0",
+  "description": "Adaptive Cloudflare edge quality scanner with statistically defensible confidence reporting",
   "type": "module",
   "bin": { "cfqoe": "bin/cfqoe.js" },
   "main": "src/cli.js",

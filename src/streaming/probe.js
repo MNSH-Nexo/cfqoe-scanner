@@ -10,6 +10,28 @@ function chooseVariant(variants, { mode = 'fixed', targetMbps = 6 } = {}) {
   return ordered.filter((item) => (item.averageBandwidth || item.bandwidth || Infinity) <= ceiling).at(-1) || ordered[0];
 }
 
+/**
+ * Highest rendition the ladder actually offers, in Mbps.
+ * A stream can never demonstrate more quality than its own top variant, so this
+ * is the hard ceiling for any quality claim we make about a candidate.
+ */
+function ladderCeilingMbps(variants = []) {
+  const values = variants
+    .map((item) => item.bandwidth || item.averageBandwidth)
+    .filter((value) => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  if (values.length === 0) return null;
+  return round(Math.max(...values) / 1e6, 3);
+}
+
+function manifestCandidates(workload) {
+  const list = [];
+  if (workload.manifestUrl) list.push(workload.manifestUrl);
+  for (const url of workload.fallbackManifestUrls || []) {
+    if (url && !list.includes(url)) list.push(url);
+  }
+  return list;
+}
+
 async function fetchPrerequisite(client, descriptor, cache) {
   if (!descriptor?.url) return { ok: true, totalMs: 0, bytes: 0 };
   if (cache.has(descriptor.url)) return cache.get(descriptor.url);
@@ -35,25 +57,35 @@ export async function probeStreaming({
   const client = createHttpClient({ proxy, timeoutMs });
   let startupOverheadMs = 0;
   let selectedVariant = null;
+  let ladderMaxMbps = typeof workload.ladderMaxMbps === 'number' ? workload.ladderMaxMbps : null;
+  let manifestUrlUsed = null;
   const prerequisiteCache = new Map();
   try {
     let segmentList = [];
     if (Array.isArray(workload.segmentUrls) && workload.segmentUrls.length > 0) {
       segmentList = workload.segmentUrls.map((url) => ({ url, durationSec: workload.segmentDurationSec || 4 }));
-    } else if (workload.manifestUrl) {
-      const manifest = await client.request(workload.manifestUrl, { captureBody: true, maxBytes: 1024 * 1024 });
-      startupOverheadMs += manifest.totalMs || 0;
-      if (!manifest.ok) return emptyResult(workload, manifest.error || 'manifest_failed', startupOverheadMs);
-      let parsed = parseHlsManifest(manifest.body.toString('utf8'), workload.manifestUrl);
-      if (parsed.isMaster) {
-        selectedVariant = chooseVariant(parsed.variants, { mode: variantMode, targetMbps });
-        if (!selectedVariant) return emptyResult(workload, 'variant_missing', startupOverheadMs);
-        const media = await client.request(selectedVariant.url, { captureBody: true, maxBytes: 1024 * 1024 });
-        startupOverheadMs += media.totalMs || 0;
-        if (!media.ok) return emptyResult(workload, media.error || 'variant_failed', startupOverheadMs);
-        parsed = parseHlsManifest(media.body.toString('utf8'), selectedVariant.url);
+    } else {
+      const candidates = manifestCandidates(workload);
+      if (candidates.length === 0) return emptyResult(workload, 'manifest_missing', startupOverheadMs);
+      let lastError = 'manifest_failed';
+      // A dead reference URL must degrade to the next ladder, not to a fake
+      // "this IP cannot stream" verdict.
+      for (const manifestUrl of candidates) {
+        const attempt = await loadSegments({
+          client, manifestUrl, variantMode, targetMbps,
+        });
+        startupOverheadMs += attempt.overheadMs;
+        if (attempt.ok) {
+          segmentList = attempt.segments;
+          selectedVariant = attempt.selectedVariant;
+          manifestUrlUsed = manifestUrl;
+          if (attempt.ladderMaxMbps) ladderMaxMbps = attempt.ladderMaxMbps;
+          break;
+        }
+        lastError = attempt.error;
+        logger?.debug('streaming.manifest.fallback', { manifestUrl, error: attempt.error });
       }
-      segmentList = parsed.segments;
+      if (segmentList.length === 0) return emptyResult(workload, lastError, startupOverheadMs);
     }
     if (segmentList.length === 0) return emptyResult(workload, 'no_segments', startupOverheadMs);
 
@@ -103,9 +135,13 @@ export async function probeStreaming({
     ], { requireAll: true });
     // A session that never reached the startup buffer has no playable quality to score.
     const score = buffer.playbackStarted ? rawScore : null;
+    const quality = qualityLabel(estimate.value, ladderMaxMbps);
+    const ladderLimited =
+      typeof estimate.value === 'number' && typeof ladderMaxMbps === 'number' && estimate.value > ladderMaxMbps;
 
     return {
       workload: workload.name,
+      manifestUrl: manifestUrlUsed || workload.manifestUrl || null,
       segments: measured.length,
       sampleCount: throughputs.length,
       successRate: round(successRate, 3),
@@ -114,7 +150,11 @@ export async function probeStreaming({
       sustainableMbps: estimate.value,
       estimator: estimate.estimator,
       estimatorConfidence: estimate.confidence,
-      quality: qualityLabel(estimate.value),
+      ladderMaxMbps,
+      // True when the path is faster than the reference ladder can prove. The
+      // honest reading is "at least this quality", never "exactly this quality".
+      ladderLimited,
+      quality,
       startupDelaySec: buffer.startupDelaySec,
       startupOverheadMs: round(startupOverheadMs, 2),
       playbackStarted: buffer.playbackStarted,
@@ -133,23 +173,56 @@ export async function probeStreaming({
   }
 }
 
-function qualityLabel(mbps) {
+async function loadSegments({ client, manifestUrl, variantMode, targetMbps }) {
+  let overheadMs = 0;
+  const manifest = await client.request(manifestUrl, { captureBody: true, maxBytes: 1024 * 1024 });
+  overheadMs += manifest.totalMs || 0;
+  if (!manifest.ok) return { ok: false, error: manifest.error || 'manifest_failed', overheadMs, segments: [] };
+  let parsed = parseHlsManifest(manifest.body.toString('utf8'), manifestUrl);
+  let ladderMaxMbps = null;
+  let selectedVariant = null;
+  if (parsed.isMaster) {
+    ladderMaxMbps = ladderCeilingMbps(parsed.variants);
+    selectedVariant = chooseVariant(parsed.variants, { mode: variantMode, targetMbps });
+    if (!selectedVariant) return { ok: false, error: 'variant_missing', overheadMs, segments: [] };
+    const media = await client.request(selectedVariant.url, { captureBody: true, maxBytes: 1024 * 1024 });
+    overheadMs += media.totalMs || 0;
+    if (!media.ok) return { ok: false, error: media.error || 'variant_failed', overheadMs, segments: [] };
+    parsed = parseHlsManifest(media.body.toString('utf8'), selectedVariant.url);
+  }
+  if (!parsed.segments || parsed.segments.length === 0) {
+    return { ok: false, error: 'no_segments', overheadMs, segments: [] };
+  }
+  return { ok: true, error: null, overheadMs, segments: parsed.segments, selectedVariant, ladderMaxMbps };
+}
+
+/**
+ * Quality label, capped by what the reference ladder can actually prove.
+ * Reporting "4K" from a ladder whose top rendition is 6 Mbps was a pure
+ * artefact of the measurement, not a property of the candidate.
+ */
+function qualityLabel(mbps, ladderMaxMbps = null) {
   if (!Number.isFinite(mbps)) return null;
-  if (mbps >= 15) return '4K';
-  if (mbps >= 6) return '1080p';
-  if (mbps >= 3) return '720p';
-  if (mbps >= 1) return '480p';
+  const effective =
+    typeof ladderMaxMbps === 'number' && Number.isFinite(ladderMaxMbps) && ladderMaxMbps > 0
+      ? Math.min(mbps, ladderMaxMbps)
+      : mbps;
+  if (effective >= 15) return '4K';
+  if (effective >= 6) return '1080p';
+  if (effective >= 3) return '720p';
+  if (effective >= 1) return '480p';
   return '360p';
 }
 
 function emptyResult(workload, error, startupOverheadMs = 0) {
   return {
-    workload: workload.name, segments: 0, sampleCount: 0, successRate: 0,
+    workload: workload.name, manifestUrl: workload.manifestUrl || null, segments: 0, sampleCount: 0, successRate: 0,
     medianMbps: null, p10Mbps: null, sustainableMbps: null, estimator: 'none',
-    estimatorConfidence: 'none', quality: null, startupDelaySec: round(startupOverheadMs / 1000, 3),
+    estimatorConfidence: 'none', ladderMaxMbps: workload.ladderMaxMbps ?? null, ladderLimited: false,
+    quality: null, startupDelaySec: round(startupOverheadMs / 1000, 3),
     startupOverheadMs: round(startupOverheadMs, 2), playbackStarted: false,
     stalls: 0, stallSec: 0, rebufferRatio: null, bytes: 0, score: null, error, detail: [],
   };
 }
 
-export { parseHlsManifest, simulateBuffer, chooseVariant };
+export { parseHlsManifest, simulateBuffer, chooseVariant, qualityLabel, ladderCeilingMbps };

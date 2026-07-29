@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { parseVlessUri, describeVless, assertWebsocketCapable } from './config/vless.js';
-import { parseRangeList, parseCidr, intToIp } from './candidate/ipv4.js';
+import { parseRangeList } from './candidate/ipv4.js';
+import { buildRangePlan, nextRoundRobinCandidate, nextLegacyCandidate } from './candidate/hard-order.js';
 import { probeWebsocket } from './probe/websocket.js';
 import { startXray } from './xray/manager.js';
 import { locateXray } from './platform/xray.js';
@@ -11,42 +12,7 @@ import { probeBrowsing } from './browsing/probe.js';
 import { probeStreaming } from './streaming/probe.js';
 import { applyTunnelResults, buildEligibilitySummary, rankCandidates, renderTopList, REPORT_SCHEMA } from './report.js';
 
-const HARD_STATE_VERSION = 1;
-
-function usableMeta(cidr) {
-  const parsed = parseCidr(cidr);
-  const usable = parsed.size > 2 ? parsed.size - 2 : parsed.size;
-  const startOffset = parsed.size > 2 ? 1 : 0;
-  return { ...parsed, usable, startOffset, range: `${parsed.network}/${parsed.prefix}` };
-}
-
-function totalCandidates(ranges) {
-  return ranges.reduce((total, entry) => total + usableMeta(entry).usable, 0);
-}
-
-function nextCandidate(ranges, cursor) {
-  let { rangeIndex = 0, hostIndex = 0 } = cursor || {};
-  while (rangeIndex < ranges.length) {
-    const meta = usableMeta(ranges[rangeIndex]);
-    if (meta.usable <= 0) {
-      rangeIndex += 1;
-      hostIndex = 0;
-      continue;
-    }
-    if (hostIndex >= meta.usable) {
-      rangeIndex += 1;
-      hostIndex = 0;
-      continue;
-    }
-    return {
-      ip: intToIp(meta.base + meta.startOffset + hostIndex),
-      range: meta.range,
-      cursor: { rangeIndex, hostIndex },
-      nextCursor: { rangeIndex, hostIndex: hostIndex + 1 },
-    };
-  }
-  return null;
-}
+const HARD_STATE_VERSION = 2;
 
 function compareEligibility(a, b) {
   if (b.eligibility.successRate !== a.eligibility.successRate) {
@@ -111,10 +77,16 @@ function clearActiveState(layout) {
   }
 }
 
+function isLegacyState(state) {
+  return state.version < HARD_STATE_VERSION || Number.isInteger(state.cursor?.hostIndex);
+}
+
 function writeSnapshot(state) {
+  const legacy = isLegacyState(state);
   const snapshot = {
     runId: state.runId,
     status: state.status,
+    traversal: legacy ? 'legacy-range-sequential' : 'range-round-robin',
     startedAt: state.startedAt,
     updatedAt: new Date().toISOString(),
     progress: {
@@ -123,7 +95,8 @@ function writeSnapshot(state) {
       failed: state.counts.failed,
       total: state.total,
       rangeIndex: state.cursor.rangeIndex,
-      hostIndex: state.cursor.hostIndex,
+      passIndex: legacy ? null : state.cursor.passIndex,
+      hostIndex: legacy ? state.cursor.hostIndex : null,
     },
     files: state.files,
     topEligibility: state.topEligibility,
@@ -138,13 +111,14 @@ function createState({ layout, runId, settings, target, total, rangesCount }) {
     version: HARD_STATE_VERSION,
     runId,
     mode: 'hard',
+    traversal: 'range-round-robin',
     status: 'in_progress',
     startedAt: new Date().toISOString(),
     target,
     settings,
     total,
     rangesCount,
-    cursor: { rangeIndex: 0, hostIndex: 0 },
+    cursor: { rangeIndex: 0, passIndex: 0 },
     counts: { tested: 0, eligible: 0, failed: 0 },
     files: {
       eligibilityFile: `${base}.eligibility.ndjson`,
@@ -196,7 +170,6 @@ function attachCancelControls(onCancel) {
 async function runTunnelStage({ candidates, settings, layout, logger, vless, onProgress }) {
   const tunnelResults = new Map();
   let xrayInfo = { enabled: false, path: null, reason: 'disabled' };
-
   if (!settings.tunnel.enabled || candidates.length === 0) return { xrayInfo, tunnelResults };
 
   const located = locateXray({ configuredPath: settings.tunnel.xrayPath, root: layout.root });
@@ -210,7 +183,6 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
   const catalog = loadCatalog(layout.workloadsFile);
   const browsingWorkloads = settings.browsing.enabled ? resolveWorkloads({ settings, catalog, kind: 'browsing' }) : [];
   const streamingWorkloads = settings.streaming.enabled ? resolveWorkloads({ settings, catalog, kind: 'streaming' }) : [];
-
   const selected = candidates
     .filter((item) => item.eligibility.successRate >= settings.scan.minimumSuccessRate)
     .slice(0, settings.tunnel.limit);
@@ -222,7 +194,6 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
   for (const candidate of selected) {
     const browsing = [];
     const streaming = [];
-
     for (let round = 1; round <= settings.tunnel.rounds; round += 1) {
       let tunnel = null;
       try {
@@ -234,20 +205,17 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
           shutdownGraceMs: settings.tunnel.shutdownGraceMs,
           logger,
         });
-
         for (const workload of browsingWorkloads) {
-          const result = await probeBrowsing({
+          browsing.push(await probeBrowsing({
             workload,
             proxy: tunnel.socks,
             timeoutMs: settings.browsing.timeoutMs,
             assetLimit: settings.browsing.assetLimit,
             logger,
-          });
-          browsing.push(result);
+          }));
         }
-
         for (const workload of streamingWorkloads) {
-          const result = await probeStreaming({
+          streaming.push(await probeStreaming({
             workload,
             proxy: tunnel.socks,
             timeoutMs: settings.streaming.timeoutMs,
@@ -255,19 +223,16 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
             startupBufferSec: settings.streaming.startupBufferSec,
             safetyFactor: settings.streaming.safetyFactor,
             logger,
-          });
-          streaming.push(result);
+          }));
         }
       } catch (error) {
         logger.warn('hard.tunnel.failed', { ip: candidate.ip, round, error: error.message });
       } finally {
         await tunnel?.stop();
       }
-
       completed += 1;
       onProgress({ phase: 'hard-finalize', completed, total, eligible: selected.length, failed: 0, currentRange: candidate.range, note: candidate.ip });
     }
-
     tunnelResults.set(candidate.ip, { browsing, streaming });
   }
 
@@ -277,12 +242,10 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
 async function loadTopEligibility(filePath, limit) {
   const top = [];
   if (!fs.existsSync(filePath)) return top;
-
   const lineReader = readline.createInterface({
     input: fs.createReadStream(filePath, 'utf8'),
     crlfDelay: Infinity,
   });
-
   for await (const line of lineReader) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -297,7 +260,6 @@ async function loadTopEligibility(filePath, limit) {
       // ignore broken lines
     }
   }
-
   return top;
 }
 
@@ -308,6 +270,7 @@ function writeHardReport({ layout, state, target, settings, candidates, xrayInfo
     generator: 'cfqoe-scanner',
     version: '0.5.0',
     mode: 'hard',
+    traversal: isLegacyState(state) ? 'legacy-range-sequential' : 'range-round-robin',
     runId: state.runId,
     startedAt: state.startedAt,
     finishedAt: new Date().toISOString(),
@@ -354,15 +317,16 @@ export async function runHardScan({
   assertWebsocketCapable(vless);
   const target = describeVless(vless);
   const ranges = parseRangeList(fs.readFileSync(layout.rangesFile, 'utf8'));
-  const total = totalCandidates(ranges);
+  const plan = buildRangePlan(ranges);
 
   let state;
   if (resume && activeStateExists(layout)) {
     state = loadState(layout);
     state.settings = settings;
     state.status = 'in_progress';
+    state.traversal = isLegacyState(state) ? 'legacy-range-sequential' : 'range-round-robin';
   } else {
-    state = createState({ layout, runId, settings, target, total, rangesCount: ranges.length });
+    state = createState({ layout, runId, settings, target, total: plan.total, rangesCount: ranges.length });
     clearActiveState(layout);
     for (const filePath of Object.values(state.files)) {
       try {
@@ -374,28 +338,32 @@ export async function runHardScan({
   }
 
   let cancelRequested = false;
-  const detachCancel = attachCancelControls(() => {
-    cancelRequested = true;
+  const detachCancel = attachCancelControls(() => { cancelRequested = true; });
+  const legacy = isLegacyState(state);
+  logger.info('hard.start', {
+    runId: state.runId,
+    target,
+    totalCandidates: plan.total,
+    ranges: ranges.length,
+    traversal: legacy ? 'legacy-range-sequential' : 'range-round-robin',
+    resume,
   });
-
-  logger.info('hard.start', { runId: state.runId, target, totalCandidates: total, ranges: ranges.length, resume });
 
   let sinceSave = 0;
   try {
     while (true) {
-      const candidate = nextCandidate(ranges, state.cursor);
-      if (!candidate) break;
-      if (cancelRequested) break;
+      const candidate = legacy
+        ? nextLegacyCandidate(plan, state.cursor)
+        : nextRoundRobinCandidate(plan, state.cursor);
+      if (!candidate || cancelRequested) break;
 
       const observations = [];
       for (let round = 0; round < settings.scan.rounds; round += 1) {
-        observations.push(
-          await probeWebsocket({
-            ip: candidate.ip,
-            vless,
-            timeoutMs: settings.scan.timeoutMs,
-          }),
-        );
+        observations.push(await probeWebsocket({
+          ip: candidate.ip,
+          vless,
+          timeoutMs: settings.scan.timeoutMs,
+        }));
         if (cancelRequested) break;
       }
 
@@ -404,7 +372,6 @@ export async function runHardScan({
         range: candidate.range,
         eligibility: observations,
       });
-
       appendEligibility(state.files.eligibilityFile, summary);
       state.cursor = candidate.nextCursor;
       state.counts.tested += 1;
@@ -420,7 +387,7 @@ export async function runHardScan({
         eligible: state.counts.eligible,
         failed: state.counts.failed,
         currentRange: candidate.range,
-        note: 'Q or Ctrl+C to stop safely',
+        note: legacy ? 'legacy resume; Q or Ctrl+C to stop safely' : `range pass ${candidate.hostIndex + 1}; Q or Ctrl+C to stop safely`,
       });
 
       if (sinceSave >= settings.hard.saveEvery || cancelRequested) {
@@ -447,7 +414,6 @@ export async function runHardScan({
     vless,
     onProgress,
   });
-
   const finalCandidates = topEligibility.map((item) => applyTunnelResults(item, tunnelResults.get(item.ip) || null));
   const result = writeHardReport({
     layout,
@@ -462,14 +428,13 @@ export async function runHardScan({
   state.lastReport = result.jsonPath;
   persistState(layout, state);
   if (!cancelRequested) clearActiveState(layout);
-
   logger.info('hard.complete', {
     runId: state.runId,
     canceled: cancelRequested,
     tested: state.counts.tested,
     eligible: state.counts.eligible,
+    traversal: state.traversal,
     report: result.jsonPath,
   });
-
   return result;
 }

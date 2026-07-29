@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import { performance } from 'node:perf_hooks';
 import { connectSocks5 } from './socks5.js';
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 CFQoE/0.6';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 CFQoE/0.7';
 
 function createAgent({ proxy, secure, timeoutMs, maxSockets }) {
   const Base = secure ? https.Agent : http.Agent;
@@ -34,7 +34,17 @@ export function createHttpClient({ proxy = null, timeoutMs = 15000, maxSockets =
     return agents[key];
   }
 
-  function request(rawUrl, { captureBody = false, maxBytes = 4 * 1024 * 1024, redirects = 3, headers = {} } = {}) {
+  function request(rawUrl, {
+    captureBody = false,
+    maxBytes = 4 * 1024 * 1024,
+    redirects = 3,
+    headers = {},
+    method = 'GET',
+    body = null,
+    keepAlive = true,
+    onFirstByte = null,
+    onProgress = null,
+  } = {}) {
     return new Promise((resolve) => {
       let url;
       try { url = new URL(rawUrl); }
@@ -57,29 +67,37 @@ export function createHttpClient({ proxy = null, timeoutMs = 15000, maxSockets =
           bytes, error: null, ...result,
         });
       };
+      const payload = body === null || body === undefined
+        ? null
+        : (Buffer.isBuffer(body) ? body : Buffer.from(String(body)));
+      const outgoingHeaders = {
+        Host: url.host, Accept: '*/*', 'Accept-Encoding': 'identity',
+        'User-Agent': USER_AGENT, Connection: keepAlive ? 'keep-alive' : 'close', ...headers,
+      };
+      if (payload) outgoingHeaders['Content-Length'] = String(payload.length);
       const clientRequest = transport.request({
         protocol: url.protocol,
         host: url.hostname,
         port: url.port || (secure ? 443 : 80),
         path: `${url.pathname}${url.search}`,
-        method: 'GET',
+        method,
         servername: url.hostname,
         agent: agentFor(secure),
-        headers: {
-          Host: url.host, Accept: '*/*', 'Accept-Encoding': 'identity',
-          'User-Agent': USER_AGENT, Connection: 'keep-alive', ...headers,
-        },
+        headers: outgoingHeaders,
       }, (response) => {
         ttfb = performance.now();
+        if (typeof onFirstByte === 'function') onFirstByte(ttfb - started);
         const status = response.statusCode || 0;
         if ([301, 302, 303, 307, 308].includes(status) && response.headers.location && redirects > 0) {
           response.resume();
           const next = new URL(response.headers.location, url).toString();
-          request(next, { captureBody, maxBytes, redirects: redirects - 1, headers }).then((result) => finish({ ...result, redirected: true }));
+          request(next, { captureBody, maxBytes, redirects: redirects - 1, headers, method, body, keepAlive, onFirstByte, onProgress })
+            .then((result) => finish({ ...result, redirected: true }));
           return;
         }
         response.on('data', (chunk) => {
           bytes += chunk.length;
+          if (typeof onProgress === 'function') onProgress(chunk.length, performance.now() - started);
           if (bytes > maxBytes) { exceeded = true; response.destroy(); return; }
           if (captureBody) chunks.push(chunk);
         });
@@ -88,6 +106,7 @@ export function createHttpClient({ proxy = null, timeoutMs = 15000, maxSockets =
           const ok = status >= 200 && status < 400;
           finish({
             ok, statusCode: status, contentType: response.headers['content-type'] || null,
+            headers: response.headers,
             body: captureBody ? Buffer.concat(chunks) : undefined,
             error: ok ? null : `http_${status}`,
           });
@@ -96,6 +115,7 @@ export function createHttpClient({ proxy = null, timeoutMs = 15000, maxSockets =
       });
       clientRequest.setTimeout(timeoutMs, () => clientRequest.destroy(new Error('timeout')));
       clientRequest.on('error', (error) => finish({ error: exceeded ? 'body_limit_exceeded' : error.code || error.message }));
+      if (payload) clientRequest.write(payload);
       clientRequest.end();
     });
   }

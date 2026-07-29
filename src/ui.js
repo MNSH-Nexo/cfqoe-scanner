@@ -1,5 +1,6 @@
 // Small ANSI helpers that degrade gracefully on legacy Windows terminals.
 const enabled = process.env.NO_COLOR === undefined && process.stdout.isTTY !== false;
+const LINE_WIDTH = 140;
 
 function wrap(code, text) {
   return enabled ? `\u001b[${code}m${text}\u001b[0m` : String(text);
@@ -32,13 +33,19 @@ export function progressBar({ completed, total, width = 28 }) {
 
 export function writeProgress(label, state) {
   if (!process.stdout.isTTY) return;
-  const line = `  ${label.padEnd(12)} ${progressBar(state)} ${state.completed}/${state.total}`;
-  process.stdout.write(`\r${line.padEnd(78)}`);
+  const extras = [];
+  if (Number.isFinite(state.eligible)) extras.push(`ok:${state.eligible}`);
+  if (Number.isFinite(state.failed)) extras.push(`fail:${state.failed}`);
+  if (state.currentRange) extras.push(`range:${state.currentRange}`);
+  if (state.note) extras.push(state.note);
+  const extraText = extras.length > 0 ? `  ${extras.join('  ')}` : '';
+  const line = `  ${label.padEnd(14)} ${progressBar(state)} ${state.completed}/${state.total}${extraText}`;
+  process.stdout.write(`\r${line.padEnd(LINE_WIDTH)}`);
 }
 
 export function clearProgress() {
   if (!process.stdout.isTTY) return;
-  process.stdout.write(`\r${' '.repeat(78)}\r`);
+  process.stdout.write(`\r${' '.repeat(LINE_WIDTH)}\r`);
 }
 
 export function table(rows, headers) {

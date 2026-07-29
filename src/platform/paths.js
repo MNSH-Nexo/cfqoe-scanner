@@ -20,8 +20,10 @@ export function paths(root = appRoot()) {
     results: path.join(root, 'results'),
     logs: path.join(root, 'logs'),
     xray: path.join(root, 'xray'),
+    hardScanDir: path.join(root, 'results', 'hard-scan'),
     settingsFile: path.join(root, 'data', 'settings.json'),
     secretFile: path.join(root, 'data', 'config.secret.uri'),
+    hardStateFile: path.join(root, 'data', 'hard-scan.state.json'),
     rangesFile: path.join(root, 'config', 'cloudflare-ipv4.txt'),
     workloadsFile: path.join(root, 'config', 'workloads.default.json'),
   };
@@ -29,7 +31,7 @@ export function paths(root = appRoot()) {
 
 export function ensureDirectories(root = appRoot()) {
   const layout = paths(root);
-  for (const directory of [layout.data, layout.results, layout.logs, layout.xray]) {
+  for (const directory of [layout.data, layout.results, layout.logs, layout.xray, layout.hardScanDir]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   if (!isWindows) {

@@ -4,26 +4,10 @@ import { median, percentile, mad, weightedScore, round } from './stats.js';
 
 export const REPORT_SCHEMA = 5;
 
-// Combines eligibility, browsing and streaming observations into one ranking.
-export function buildCandidateSummary({ ip, range, eligibility, tunnel }) {
+export function buildEligibilitySummary({ ip, range, eligibility }) {
   const handshakes = eligibility.filter((item) => item.ok).map((item) => item.handshakeMs);
   const connects = eligibility.filter((item) => item.ok).map((item) => item.connectMs);
   const successRate = eligibility.length === 0 ? 0 : eligibility.filter((item) => item.ok).length / eligibility.length;
-
-  const browsingScores = (tunnel?.browsing || []).map((item) => item.score).filter((value) => value !== null);
-  const streamingScores = (tunnel?.streaming || []).map((item) => item.score).filter((value) => value !== null);
-
-  const browsingScore = browsingScores.length > 0 ? round(median(browsingScores), 1) : null;
-  const streamingScore = streamingScores.length > 0 ? round(median(streamingScores), 1) : null;
-  const hasExperienceScore = browsingScore !== null || streamingScore !== null;
-
-  const overall = hasExperienceScore
-    ? weightedScore([
-        { score: browsingScore === null ? null : browsingScore / 100, weight: 45 },
-        { score: streamingScore === null ? null : streamingScore / 100, weight: 40 },
-        { score: successRate, weight: 15 },
-      ])
-    : null;
 
   return {
     ip,
@@ -37,15 +21,41 @@ export function buildCandidateSummary({ ip, range, eligibility, tunnel }) {
       connectMedianMs: round(median(connects), 2),
       cfRay: eligibility.find((item) => item.cfRay)?.cfRay ? true : false,
     },
+  };
+}
+
+export function applyTunnelResults(summary, tunnel) {
+  const browsingScores = (tunnel?.browsing || []).map((item) => item.score).filter((value) => value !== null);
+  const streamingScores = (tunnel?.streaming || []).map((item) => item.score).filter((value) => value !== null);
+
+  const browsingScore = browsingScores.length > 0 ? round(median(browsingScores), 1) : null;
+  const streamingScore = streamingScores.length > 0 ? round(median(streamingScores), 1) : null;
+  const hasExperienceScore = browsingScore !== null || streamingScore !== null;
+
+  const overall = hasExperienceScore
+    ? weightedScore([
+        { score: browsingScore === null ? null : browsingScore / 100, weight: 45 },
+        { score: streamingScore === null ? null : streamingScore / 100, weight: 40 },
+        { score: summary.eligibility.successRate, weight: 15 },
+      ])
+    : null;
+
+  return {
+    ...summary,
     browsing: summarizeBrowsing(tunnel?.browsing || []),
     streaming: summarizeStreaming(tunnel?.streaming || []),
     scores: {
       browsing: browsingScore,
       streaming: streamingScore,
-      reliability: round(successRate * 100, 1),
+      reliability: round(summary.eligibility.successRate * 100, 1),
       overall,
     },
   };
+}
+
+// Combines eligibility, browsing and streaming observations into one ranking.
+export function buildCandidateSummary({ ip, range, eligibility, tunnel }) {
+  return applyTunnelResults(buildEligibilitySummary({ ip, range, eligibility }), tunnel);
 }
 
 function summarizeBrowsing(items) {

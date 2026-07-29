@@ -7,6 +7,7 @@ import { parseVlessUri, describeVless } from './config/vless.js';
 import { locateXray, xrayVersion, xrayInstallHint } from './platform/xray.js';
 import { createLogger, summarizeLogFile } from './logging/logger.js';
 import { runScan } from './scan.js';
+import { runHardScan } from './hard-scan.js';
 import { runMenu, quickProfile } from './menu/index.js';
 
 const HELP = `${banner()}
@@ -16,6 +17,8 @@ ${color.bold('Usage')}
   cfqoe menu                same as above
   cfqoe scan [options]      run a full scan
   cfqoe quick [options]     run a reduced scan
+  cfqoe hard [options]      run the sequential resumable hard scan
+  cfqoe resume [options]    resume the last hard scan
   cfqoe import <vless-uri>  store the configuration locally
   cfqoe check               verify Node, Xray and stored configuration
   cfqoe results             print the latest ranking
@@ -23,7 +26,7 @@ ${color.bold('Usage')}
   cfqoe help                show this help
 
 ${color.bold('Scan options')}
-  --max N               maximum candidate IPs
+  --max N               maximum candidate IPs (scan/quick only)
   --rounds N            eligibility rounds
   --tunnel-limit N      candidates measured through the real tunnel
   --tunnel-rounds N     observations per candidate
@@ -151,6 +154,41 @@ async function commandScan(options, { quick }) {
   }
 }
 
+async function commandHard(options, { resume }) {
+  const layout = ensureDirectories();
+  const stored = loadSettings(layout.settingsFile);
+  const settings = applyOptions(stored, options);
+
+  if (!fs.existsSync(layout.secretFile)) {
+    throw new Error('No configuration stored. Run: cfqoe import "vless://..."');
+  }
+
+  const logger = createLogger({ level: settings.logging.level, directory: layout.logs });
+  console.log(`${banner()}\n`);
+  console.log(`${resume ? 'Resuming' : 'Starting'} hard scan. Run id: ${logger.runId}`);
+  console.log(color.dim('Checkpointed mode: press Q or Ctrl+C to stop safely.\n'));
+
+  try {
+    const result = await runHardScan({
+      vlessUri: readSecretFile(layout.secretFile),
+      settings,
+      layout,
+      logger,
+      runId: logger.runId,
+      resume,
+      onProgress: (state) => writeProgress(state.phase, state),
+    });
+    clearProgress();
+    console.log(result.canceled ? color.yellow('Hard scan paused safely.') : color.green('Hard scan completed.'));
+    console.log(`Report:  ${result.jsonPath}`);
+    console.log(`Ranking: ${result.topPath}\n`);
+    printRanking(result.report.results);
+    return 0;
+  } finally {
+    await logger.close();
+  }
+}
+
 async function commandCheck() {
   const layout = ensureDirectories();
   const settings = loadSettings(layout.settingsFile);
@@ -227,6 +265,10 @@ export async function main(argv = process.argv.slice(2)) {
         return await commandScan(parseArgs(rest), { quick: false });
       case 'quick':
         return await commandScan(parseArgs(rest), { quick: true });
+      case 'hard':
+        return await commandHard(parseArgs(rest), { resume: false });
+      case 'resume':
+        return await commandHard(parseArgs(rest), { resume: true });
       case 'import':
         return commandImport(rest[0]);
       case 'check':

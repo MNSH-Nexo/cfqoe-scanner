@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildCandidateSummary, rankCandidates, writeReport, renderTopList, REPORT_SCHEMA } from '../src/report.js';
+import { applyTunnelResults, buildCandidateSummary, buildEligibilitySummary, rankCandidates, writeReport, renderTopList, REPORT_SCHEMA } from '../src/report.js';
 
 function candidate(ip, { browsingScore, streamingScore, ok = true }) {
   return buildCandidateSummary({
@@ -47,6 +47,21 @@ test('buildCandidateSummary aggregates every stage', () => {
   assert.equal(summary.scores.streaming, 90);
   assert.ok(summary.scores.overall > 80 && summary.scores.overall <= 100);
   assert.equal(summary.streaming.quality, '1080p');
+});
+
+test('eligibility summaries can be scored later with tunnel data', () => {
+  const eligibility = buildEligibilitySummary({
+    ip: '104.16.0.8',
+    range: '104.16.0.0/13',
+    eligibility: [{ ok: true, handshakeMs: 100, connectMs: 30, cfRay: 'abc' }],
+  });
+  const rescored = applyTunnelResults(eligibility, {
+    browsing: [{ score: 77, coldMs: 300, warmMs: 180, ttfbP90Ms: 120, successRate: 1, bytes: 100 }],
+    streaming: [{ score: 88, sustainableMbps: 7, p10Mbps: 9, quality: '1080p', startupDelaySec: 1, rebufferRatio: 0, bytes: 1000 }],
+  });
+  assert.equal(rescored.scores.browsing, 77);
+  assert.equal(rescored.scores.streaming, 88);
+  assert.ok(rescored.scores.overall !== null);
 });
 
 test('candidates without tunnel data still receive reliability but no overall rank', () => {

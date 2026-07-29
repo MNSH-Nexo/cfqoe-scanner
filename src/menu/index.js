@@ -4,23 +4,25 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { banner, color, table, writeProgress, clearProgress } from '../ui.js';
 import { ensureDirectories, paths, writeSecretFile, readSecretFile, removeSecretFile, fileIsProtected, isWindows } from '../platform/paths.js';
-import { loadSettings, saveSettings, loadCatalog } from '../config/settings.js';
+import { loadSettings, saveSettings, loadCatalog, DEFAULT_SETTINGS } from '../config/settings.js';
 import { parseVlessUri, describeVless } from '../config/vless.js';
 import { locateXray, xrayVersion, xrayInstallHint } from '../platform/xray.js';
 import { createLogger, summarizeLogFile } from '../logging/logger.js';
 import { runScan } from '../scan.js';
-import { renderTopList } from '../report.js';
+import { runHardScan, hasHardScanState } from '../hard-scan.js';
 
 const MENU = `
   ${color.bold('1')}. Quick Scan            ${color.dim('fast check with a small candidate set')}
   ${color.bold('2')}. Full Scan             ${color.dim('wider sampling and more rounds')}
-  ${color.bold('3')}. VLESS Configuration   ${color.dim('import, inspect or remove your config')}
-  ${color.bold('4')}. Workload Settings     ${color.dim('choose or add browsing and streaming targets')}
-  ${color.bold('5')}. System Check          ${color.dim('verify Node, Xray and file protection')}
-  ${color.bold('6')}. Best IPs              ${color.dim('show the latest ranking')}
-  ${color.bold('7')}. Previous Results      ${color.dim('list saved reports')}
-  ${color.bold('8')}. Diagnostics           ${color.dim('summarize the newest log file')}
-  ${color.bold('9')}. Advanced Settings     ${color.dim('tune rounds, limits and timeouts')}
+  ${color.bold('3')}. Hard Deep Scan        ${color.dim('sequential, checkpointed, resumable sweep')}
+  ${color.bold('4')}. Resume Hard Scan      ${color.dim('continue the last deep sweep')}
+  ${color.bold('5')}. VLESS Configuration   ${color.dim('import, inspect or remove your config')}
+  ${color.bold('6')}. Workload Settings     ${color.dim('choose or add browsing and streaming targets')}
+  ${color.bold('7')}. System Check          ${color.dim('verify Node, Xray and file protection')}
+  ${color.bold('8')}. Best IPs              ${color.dim('show the latest ranking')}
+  ${color.bold('9')}. Previous Results      ${color.dim('list saved reports')}
+  ${color.bold('10')}. Diagnostics          ${color.dim('summarize the newest log file')}
+  ${color.bold('11')}. Scan Settings        ${color.dim('edit numbers with a friendly picker')}
   ${color.bold('0')}. Exit
 `;
 
@@ -55,6 +57,7 @@ function statusLine(layout, settings) {
   const parts = [
     hasConfig ? color.green('config: ready') : color.yellow('config: missing'),
     xray.found ? color.green('xray: found') : color.yellow('xray: missing'),
+    hasHardScanState(layout) ? color.yellow('resume: available') : color.dim('resume: none'),
     color.dim(`platform: ${process.platform}-${process.arch}`),
   ];
   return `  ${parts.join('   ')}`;
@@ -67,18 +70,22 @@ async function handleChoice(choice, context) {
     case '2':
       return startScan(context, 'full');
     case '3':
-      return manageConfig(context);
+      return startHard(context, false);
     case '4':
-      return manageWorkloads(context);
+      return startHard(context, true);
     case '5':
-      return systemCheck(context);
+      return manageConfig(context);
     case '6':
-      return showBestIps(context);
+      return manageWorkloads(context);
     case '7':
-      return listResults(context);
+      return systemCheck(context);
     case '8':
-      return diagnostics(context);
+      return showBestIps(context);
     case '9':
+      return listResults(context);
+    case '10':
+      return diagnostics(context);
+    case '11':
       return advancedSettings(context);
     default:
       console.log(`\n  ${color.yellow('Unknown option.')}`);
@@ -98,7 +105,7 @@ export function quickProfile(settings) {
 
 async function startScan({ layout, settings }, mode) {
   if (!fs.existsSync(layout.secretFile)) {
-    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 3).')}`);
+    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 5).')}`);
     return;
   }
   const effective = mode === 'quick' ? quickProfile(settings) : settings;
@@ -130,6 +137,43 @@ async function startScan({ layout, settings }, mode) {
   }
 }
 
+async function startHard({ rl, layout, settings }, resume) {
+  if (!fs.existsSync(layout.secretFile)) {
+    console.log(`\n  ${color.yellow('Import your VLESS configuration first (option 5).')}`);
+    return;
+  }
+  if (resume && !hasHardScanState(layout)) {
+    console.log(`\n  ${color.yellow('No paused hard scan was found.')}`);
+    return;
+  }
+  const uri = readSecretFile(layout.secretFile);
+  const logger = createLogger({ level: settings.logging.level, directory: layout.logs });
+  rl.pause();
+  console.log(`\n  ${color.bold(resume ? 'Resuming hard scan' : 'Hard deep scan')} started. Run id: ${logger.runId}`);
+  console.log(`  ${color.dim('Progress is checkpointed automatically. Press Q or Ctrl+C to stop safely.')}\n`);
+
+  try {
+    const result = await runHardScan({
+      vlessUri: uri,
+      settings,
+      layout,
+      logger,
+      runId: logger.runId,
+      resume,
+      onProgress: (state) => writeProgress(state.phase, state),
+    });
+    clearProgress();
+    if (result.canceled) console.log(`  ${color.yellow('Hard scan paused safely.')}`);
+    else console.log(`  ${color.green('Hard scan completed.')}`);
+    console.log(`  Eligible IPs so far: ${result.eligibleCount}`);
+    console.log(`  Report: ${result.jsonPath}`);
+    printTop(result.report.results);
+  } finally {
+    await logger.close();
+    rl.resume();
+  }
+}
+
 function printTop(results, limit = 10) {
   const rows = results
     .slice(0, limit)
@@ -151,10 +195,10 @@ function printTop(results, limit = 10) {
 async function manageConfig({ rl, layout }) {
   const exists = fs.existsSync(layout.secretFile);
   console.log(`\n  Current state: ${exists ? color.green('configuration stored') : color.yellow('no configuration')}`);
-  console.log('  a) Import or replace   b) Inspect   c) Remove   Enter) Back');
+  console.log('  1) Import or replace   2) Inspect   3) Remove   0) Back');
   const action = (await rl.question('  Choose: ')).trim().toLowerCase();
 
-  if (action === 'a') {
+  if (action === '1') {
     const uri = (await rl.question('  Paste your vless:// link: ')).trim();
     const parsed = parseVlessUri(uri);
     if (parsed.transport !== 'ws') {
@@ -163,12 +207,12 @@ async function manageConfig({ rl, layout }) {
     writeSecretFile(layout.secretFile, uri);
     console.log(`  ${color.green('Saved.')} The link is stored locally and never printed again.`);
     console.log(`  ${JSON.stringify(describeVless(parsed))}`);
-  } else if (action === 'b') {
+  } else if (action === '2') {
     if (!exists) throw new Error('No configuration is stored');
     const parsed = parseVlessUri(readSecretFile(layout.secretFile));
     console.log(`  ${JSON.stringify(describeVless(parsed), null, 2)}`);
     console.log(`  File protected: ${fileIsProtected(layout.secretFile) ? color.green('yes') : color.yellow('check permissions')}`);
-  } else if (action === 'c') {
+  } else if (action === '3') {
     removeSecretFile(layout.secretFile);
     console.log(`  ${color.green('Configuration removed.')}`);
   }
@@ -187,19 +231,19 @@ async function manageWorkloads({ rl, layout, settings }) {
     console.log(`   ${active} ${index + 1}. ${item.name} - ${item.description}`);
   });
 
-  console.log('\n  a) Toggle browsing   b) Toggle streaming   c) Add custom page   d) Add custom stream   Enter) Back');
+  console.log('\n  1) Toggle browsing   2) Toggle streaming   3) Add custom page   4) Add custom stream   0) Back');
   const action = (await rl.question('  Choose: ')).trim().toLowerCase();
   const next = { ...settings };
 
-  if (action === 'a' || action === 'b') {
-    const kind = action === 'a' ? 'browsing' : 'streaming';
-    const name = (await rl.question(`  Workload name to toggle: `)).trim();
+  if (action === '1' || action === '2') {
+    const kind = action === '1' ? 'browsing' : 'streaming';
+    const name = (await rl.question('  Workload name to toggle: ')).trim();
     if (!catalog[kind].some((item) => item.name === name)) throw new Error(`Unknown workload: ${name}`);
     const active = new Set(next[kind].workloads);
     if (active.has(name)) active.delete(name);
     else active.add(name);
     next[kind] = { ...next[kind], workloads: Array.from(active) };
-  } else if (action === 'c') {
+  } else if (action === '3') {
     const name = (await rl.question('  Name: ')).trim();
     const pageUrl = (await rl.question('  Page URL: ')).trim();
     new URL(pageUrl);
@@ -207,7 +251,7 @@ async function manageWorkloads({ rl, layout, settings }) {
       ...next.customWorkloads,
       browsing: [...next.customWorkloads.browsing, { name, pageUrl }],
     };
-  } else if (action === 'd') {
+  } else if (action === '4') {
     const name = (await rl.question('  Name: ')).trim();
     const manifestUrl = (await rl.question('  HLS manifest URL (.m3u8): ')).trim();
     new URL(manifestUrl);
@@ -230,6 +274,7 @@ async function systemCheck({ layout, settings }) {
     ['Platform', `${process.platform}-${process.arch}`, isWindows ? 'windows native' : 'posix'],
     ['Config file', fs.existsSync(layout.secretFile) ? 'present' : 'missing', fileIsProtected(layout.secretFile) ? 'protected' : 'unprotected'],
     ['Results dir', layout.results, fs.existsSync(layout.results) ? 'ok' : 'missing'],
+    ['Hard resume', hasHardScanState(layout) ? 'available' : 'none', layout.hardStateFile],
   ];
 
   if (located.found) {
@@ -296,27 +341,59 @@ async function diagnostics({ layout }) {
 
 async function advancedSettings({ rl, layout, settings }) {
   const fields = [
-    ['scan.maxCandidates', settings.scan.maxCandidates],
-    ['scan.rounds', settings.scan.rounds],
-    ['scan.concurrency', settings.scan.concurrency],
-    ['tunnel.limit', settings.tunnel.limit],
-    ['tunnel.rounds', settings.tunnel.rounds],
-    ['streaming.maxSegments', settings.streaming.maxSegments],
-    ['browsing.assetLimit', settings.browsing.assetLimit],
-    ['logging.level', settings.logging.level],
+    { label: 'Max candidates (full scan)', group: 'scan', field: 'maxCandidates' },
+    { label: 'Eligibility rounds', group: 'scan', field: 'rounds' },
+    { label: 'Eligibility concurrency', group: 'scan', field: 'concurrency' },
+    { label: 'Successful threshold', group: 'scan', field: 'minimumSuccessRate' },
+    { label: 'Tunnel finalists', group: 'tunnel', field: 'limit' },
+    { label: 'Tunnel rounds', group: 'tunnel', field: 'rounds' },
+    { label: 'Streaming segments', group: 'streaming', field: 'maxSegments' },
+    { label: 'Browsing asset limit', group: 'browsing', field: 'assetLimit' },
+    { label: 'Hard-save every N IPs', group: 'hard', field: 'saveEvery' },
+    { label: 'Hard live top count', group: 'hard', field: 'liveTop' },
+    { label: 'Hard final top count', group: 'hard', field: 'finalTop' },
+    { label: 'Log level', group: 'logging', field: 'level', values: ['debug', 'info', 'warn', 'error'] },
   ];
-  console.log(`\n${table(fields.map(([key, value]) => [key, String(value)]), ['Setting', 'Value'])}`);
-  const key = (await rl.question('\n  Setting to change (blank to go back): ')).trim();
-  if (key.length === 0) return;
-  if (!fields.some(([name]) => name === key)) throw new Error(`Unknown setting: ${key}`);
-  const raw = (await rl.question('  New value: ')).trim();
 
-  const [group, field] = key.split('.');
-  const next = { ...settings, [group]: { ...settings[group] } };
-  next[group][field] = field === 'level' ? raw : Number(raw);
-  if (field !== 'level' && !Number.isFinite(next[group][field])) throw new Error('Value must be a number');
-  saveSettings(layout.settingsFile, next);
-  console.log(`  ${color.green('Saved.')}`);
+  for (;;) {
+    const rows = fields.map((item, index) => [String(index + 1), item.label, String(settings[item.group][item.field])]);
+    console.log(`\n${table(rows, ['#', 'Setting', 'Value'])}`);
+    console.log(`\n  0) Back   d) Restore defaults`);
+    const choice = (await rl.question('  Choose a setting: ')).trim().toLowerCase();
+    if (choice === '0' || choice.length === 0) return;
+    if (choice === 'd') {
+      saveSettings(layout.settingsFile, DEFAULT_SETTINGS);
+      Object.assign(settings, loadSettings(layout.settingsFile));
+      console.log(`  ${color.green('Defaults restored.')}`);
+      continue;
+    }
+
+    const selected = fields[Number(choice) - 1];
+    if (!selected) {
+      console.log(`  ${color.yellow('Unknown selection.')}`);
+      continue;
+    }
+
+    const current = settings[selected.group][selected.field];
+    const prompt = selected.values
+      ? `  New value (${selected.values.join('/')}), current ${current}: `
+      : `  New value, current ${current}: `;
+    const raw = (await rl.question(prompt)).trim();
+    if (raw.length === 0) continue;
+
+    const next = { ...settings, [selected.group]: { ...settings[selected.group] } };
+    if (selected.values) {
+      if (!selected.values.includes(raw)) throw new Error(`Allowed values: ${selected.values.join(', ')}`);
+      next[selected.group][selected.field] = raw;
+    } else {
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric) || numeric <= 0) throw new Error('Value must be a positive number');
+      next[selected.group][selected.field] = numeric;
+    }
+    saveSettings(layout.settingsFile, next);
+    Object.assign(settings, next);
+    console.log(`  ${color.green('Saved.')}`);
+  }
 }
 
 export { paths };

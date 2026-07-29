@@ -35,6 +35,11 @@ export const DEFAULT_SETTINGS = {
     safetyFactor: 1.25,
     timeoutMs: 25000,
   },
+  hard: {
+    saveEvery: 25,
+    liveTop: 30,
+    finalTop: 200,
+  },
   customWorkloads: {
     browsing: [],
     streaming: [],

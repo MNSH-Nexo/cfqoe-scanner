@@ -1,21 +1,73 @@
-MIT License
+CFQoE Source-Available Attribution Non-Commercial License 1.0
 
-Copyright (c) 2026 MNSH-Nexo
+Copyright (c) 2026 Erfan
+All rights reserved except as expressly granted by this License.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Definitions
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+"Software" means the CFQoE Scanner project, including its source code, documentation, configuration files, scripts, examples, and any associated materials distributed in this repository.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+"Modified Version" means any version of the Software that has been changed, adapted, translated, extended, incorporated in part, or otherwise derived from the Software.
+
+"Licensor" means Erfan, the original author and copyright holder of the Software.
+
+"Non-Commercial" means not primarily intended for or directed toward commercial advantage or monetary compensation from the Software itself or a Modified Version.
+
+2. Grant of Rights
+
+Subject to the terms and conditions of this License, the Licensor grants you a personal, worldwide, revocable, non-exclusive, non-transferable, non-sublicensable license to:
+
+(a) use, run, and study the Software;
+(b) copy the Software for backup, development, testing, or deployment;
+(c) modify the Software and create Modified Versions; and
+(d) share or redistribute the Software or Modified Versions solely on a Non-Commercial basis and only in compliance with Section 3.
+
+For clarity, internal use of the Software inside your own organization is allowed, provided you do not sell, sublicense, or commercially distribute the Software or a Modified Version.
+
+3. Conditions for Use, Sharing, and Redistribution
+
+If you share, publish, distribute, or otherwise make the Software or a Modified Version available to any third party, you must:
+
+(a) retain this License in full;
+(b) retain all copyright, authorship, and attribution notices;
+(c) clearly and prominently state that the work contains code from "CFQoE Scanner" by Erfan;
+(d) include a visible link to the original source repository, if technically feasible;
+(e) clearly mark that changes were made, if you modified the Software; and
+(f) not state or imply that you are the original author of the Software.
+
+4. Prohibited Acts
+
+You may not, without the Licensor's prior written permission:
+
+(a) sell, resell, license, sublicense, rent, lease, or otherwise monetize the Software or a Modified Version;
+(b) distribute the Software or a Modified Version as part of a paid product, paid bundle, paid subscription, paid hosted service, or other commercial offering where the Software is a material part of the value offered;
+(c) remove, alter, hide, or falsify copyright, attribution, authorship, repository, or license notices;
+(d) publish, mirror, fork, or redistribute the Software or a Modified Version under your own name in a manner that conceals or misrepresents the original authorship;
+(e) relicense the Software or a Modified Version under terms that conflict with, weaken, or remove the obligations of this License; or
+(f) use the name "CFQoE Scanner", the Licensor's name, or any related branding to suggest endorsement without prior written permission.
+
+5. Ownership and Reservation of Rights
+
+The Software is licensed, not sold. Title, ownership, and all intellectual property rights in and to the Software remain with the Licensor. No rights are granted except those expressly stated in this License.
+
+6. No Patent or Trademark License
+
+No patent rights or trademark rights are granted under this License except to the limited extent strictly necessary to exercise the express rights granted in Section 2.
+
+7. Termination
+
+This License terminates automatically and immediately if you breach any term of this License. Upon termination, you must cease all use, distribution, and making available of the Software and any Modified Version, and destroy or remove all copies under your control, except to the extent applicable law requires retention.
+
+Sections 4, 5, 6, 8, 9, and 10 survive termination.
+
+8. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, OR THAT THE SOFTWARE WILL BE ERROR-FREE OR UNINTERRUPTED.
+
+9. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSOR SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF DATA, REVENUE, PROFITS, GOODWILL, OR BUSINESS INTERRUPTION, ARISING OUT OF OR RELATING TO THE SOFTWARE OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+10. General
+
+If any provision of this License is held unenforceable, the remaining provisions will remain in full force and effect. Failure to enforce any provision of this License will not constitute a waiver of that provision. Any permission outside this License must be granted in prior written form by the Licensor.

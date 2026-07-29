@@ -3,24 +3,23 @@ import assert from 'node:assert/strict';
 import { buildEligibilitySummary, applyTunnelResults, rankCandidates, REPORT_SCHEMA } from '../src/report.js';
 
 test('report schema preserves uncertainty, POP and error classes', () => {
-  assert.equal(REPORT_SCHEMA, 7);
+  assert.equal(REPORT_SCHEMA, 9);
   const summary = buildEligibilitySummary({
     ip: '1.1.1.1', range: '1.1.1.0/24',
-    eligibility: [
-      { ok: true, handshakeMs: 20, connectMs: 5, cfRay: 'a-FRA' },
-      { ok: false, error: 'timeout' },
-    ],
+    eligibility: [{ ok: true, handshakeMs: 20, connectMs: 5, cfRay: 'a-FRA' }, { ok: false, error: 'timeout' }],
   });
   assert.equal(summary.eligibility.pops.dominant, 'FRA');
   assert.equal(summary.eligibility.errors.retryable, 1);
   assert.ok(summary.eligibility.confidence95.lower < 0.5);
 });
 
-test('required missing workload makes overall incomplete', () => {
+test('required missing workload makes overall partial instead of erasing measured evidence', () => {
   const base = buildEligibilitySummary({ ip: '1.1.1.1', range: 'x', eligibility: Array(8).fill({ ok: true, handshakeMs: 10, connectMs: 2 }) });
   const item = applyTunnelResults(base, { browsing: [{ score: 90, coldMs: 1, warmMs: 1, ttfbP90Ms: 1, successRate: 1 }] }, { browsing: true, streaming: true });
-  assert.equal(item.measurement.status, 'incomplete');
-  assert.equal(item.scores.overall, null);
+  assert.equal(item.measurement.status, 'partial');
+  assert.ok(Number.isFinite(item.scores.overall));
+  assert.ok(item.scores.overall <= 70);
+  assert.deepEqual(item.measurement.missingComponents, ['streaming']);
 });
 
 test('ranking prefers complete conservative evidence', () => {

@@ -8,12 +8,11 @@ CFQoE Scanner روی **Windows، Linux و Android/Termux** اجرا می‌شو�
 
 - پشتیبانی از Windows، Linux و Android/Termux بدون نیاز به سرور
 - پشتیبانی از VLESS + WebSocket
-- دانلود خودکار نسخه رسمی و مناسب Xray برای هر پلتفرم
-- Quick Scan، Full Scan و Hard Deep Scan
-- Hard Scan ترتیبی، checkpointed و قابل Resume
+- دانلود خودکار نسخه رسمی و مناسب Xray
+- نمونه تصادفی تازه در هر اجرای Quick و Full Scan
+- Hard Scan به‌صورت range round-robin، checkpointed و قابل Resume
 - توقف امن با `Q` یا `Ctrl+C` و نهایی‌سازی نتایج موجود
 - اندازه‌گیری واقعی browsing و streaming
-- workloadهای داخلی و امکان افزودن صفحه یا HLS دلخواه
 - گزارش JSON، رتبه‌بندی متنی و لاگ ساخت‌یافته
 - محافظت محلی از URI و حذف اطلاعات حساس از گزارش‌ها
 
@@ -30,13 +29,7 @@ git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git
 cd cfqoe-scanner
 ```
 
-سپس فایل زیر را دوبار کلیک کنید:
-
-```text
-Start-CFQoE.cmd
-```
-
-Xray در اجرای اول به‌صورت خودکار دانلود می‌شود.
+سپس `Start-CFQoE.cmd` را اجرا کنید. Xray در اجرای اول خودکار دانلود می‌شود.
 
 ## Linux
 
@@ -47,19 +40,13 @@ chmod +x start-cfqoe.sh
 ./start-cfqoe.sh
 ```
 
-Node.js 20 یا بالاتر و یکی از ابزارهای `python3` یا `unzip` لازم است.
-
 ## Android با Termux — نصب با یک دستور
 
-> Termux را ترجیحاً از F-Droid یا GitHub رسمی Termux نصب کنید. پروژه را داخل Home ترموکس نگه دارید، نه Download یا `/sdcard`.
-
-این دستور را کامل داخل Termux paste کنید:
+> پروژه را داخل Home ترموکس نگه دارید، نه Download یا `/sdcard`.
 
 ```bash
 pkg update -y && pkg install -y git && git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git && cd cfqoe-scanner && bash install-termux.sh
 ```
-
-این دستور پیش‌نیازها را نصب می‌کند، معماری گوشی را تشخیص می‌دهد، **Xray رسمی Android** را دانلود و بررسی می‌کند و سپس منو را باز می‌کند.
 
 اجرای دفعات بعد:
 
@@ -68,43 +55,25 @@ cd ~/cfqoe-scanner
 ./start-cfqoe.sh
 ```
 
-راهنمای کامل Android، مصرف باتری، به‌روزرسانی و رفع خطا: [docs/ANDROID-TERMUX.md](docs/ANDROID-TERMUX.md)
-
----
-
-## Xray چگونه آماده می‌شود؟
-
-اگر Xray وجود نداشته باشد یا باینری اشتباه/خراب باشد، لانچر نسخه مناسب را از Releases رسمی `XTLS/Xray-core` دریافت می‌کند:
-
-- Windows x64/arm64
-- Linux x64/arm64
-- Android arm64/x64
-
-در صورت وجود SHA-256 digest در metadata انتشار، آرشیو قبل از نصب بررسی می‌شود. باینری نصب‌شده نیز با اجرای `xray version` آزمایش می‌شود.
-
-نصب دستی:
-
-```bash
-npm run xray:install
-```
+راهنمای کامل: [docs/ANDROID-TERMUX.md](docs/ANDROID-TERMUX.md)
 
 ---
 
 # شروع کار
 
-1. برنامه را با لانچر سیستم‌عامل خود اجرا کنید.
+1. برنامه را با لانچر سیستم‌عامل اجرا کنید.
 2. وارد `VLESS Configuration` شوید و URI را وارد کنید.
 3. `System Check` را اجرا کنید.
 4. ابتدا `Quick Scan` بزنید.
 5. نتیجه را از `Best IPs` ببینید.
-6. برای بررسی وسیع‌تر از Full Scan و برای شرایط دشوار از Hard Deep Scan استفاده کنید.
+6. برای پوشش وسیع‌تر Full Scan و برای جست‌وجوی طولانی Hard Deep Scan را اجرا کنید.
 
 ## منوی اصلی
 
 ```text
-1. Quick Scan            fast check with a small candidate set
-2. Full Scan             wider sampling and more rounds
-3. Hard Deep Scan        sequential, checkpointed, resumable sweep
+1. Quick Scan            fresh random sample, small and fast
+2. Full Scan             fresh wider sample and more rounds
+3. Hard Deep Scan        one IP per range per pass, resumable
 4. Resume Hard Scan      continue the last deep sweep
 5. VLESS Configuration   import, inspect or remove your config
 6. Workload Settings     choose or add browsing and streaming targets
@@ -116,30 +85,54 @@ npm run xray:install
 0. Exit
 ```
 
+خروجی هر گزینه زیر همان منو نمایش داده می‌شود و تا زمانی که Enter نزده‌اید پاک نخواهد شد. این رفتار باعث می‌شود نتیجه اسکن، Previous Results و Diagnostics روی Termux هم قابل مشاهده بمانند.
+
 ---
 
-# حالت‌های اسکن
+# تفاوت Quick، Full و Hard
 
 ## Quick Scan
 
-مجموعه کوچک‌تری از IPها را با تنظیمات سبک‌تر بررسی می‌کند. برای اولین اجرا و کنترل سلامت pipeline مناسب است.
+- به‌طور پیش‌فرض فقط **16 IP** را بررسی می‌کند.
+- برای هر اجرا یک seed تصادفی تازه می‌سازد.
+- رنج‌ها و IPهای انتخابی هر اجرا باید با اجرای قبل متفاوت باشند.
+- برای تست سریع pipeline و گرفتن چند نتیجه اولیه طراحی شده است.
 
 ## Full Scan
 
-نمونه‌برداری وسیع‌تر، rounds بیشتر و مقایسه دقیق‌تری انجام می‌دهد. IPها از رنج‌های مختلف با shuffled round-robin انتخاب می‌شوند تا رنج‌های پایین فایل نادیده گرفته نشوند.
+- به‌طور پیش‌فرض **120 IP** را بررسی می‌کند.
+- تعداد آن از `Scan Settings → Max candidates` قابل تغییر است.
+- در هر اجرا seed تازه تولید می‌کند.
+- رنج‌ها با shuffled round-robin پخش می‌شوند تا انتخاب فقط از ابتدای فایل نباشد.
+- seed واقعی داخل لاگ و گزارش ذخیره می‌شود تا همان اجرا قابل دیباگ باشد.
+
+وجود حدود دو میلیون IP در catalog به این معنی نیست که Quick یا Full همه آن‌ها را در یک اجرا تست می‌کنند؛ چنین کاری بسیار طولانی خواهد بود. Quick و Full **sampled scans** هستند. برای پیمایش کامل و قابل ادامه باید از Hard Deep Scan استفاده شود.
 
 ## Hard Deep Scan
 
-- رنج‌ها را به‌صورت ترتیبی و بدون انتخاب تصادفی جلو می‌برد.
-- تعداد IPهای هر CIDR را از خود CIDR محاسبه می‌کند.
-- در رنج‌های معمولی network و broadcast را کنار می‌گذارد و usable hostها را اسکن می‌کند.
-- بعد از هر تعداد مشخص IP checkpoint و snapshot می‌سازد.
-- تعداد IPهای موفق و ناموفق را زنده نشان می‌دهد.
+Hard Scan جدید breadth-first یا **range round-robin** است:
+
+1. اولین usable IP از رنج اول
+2. اولین usable IP از رنج دوم
+3. ادامه تا آخرین رنج
+4. دومین usable IP از رنج اول
+5. دومین usable IP از رنج دوم
+6. و به همین ترتیب تا پایان
+
+این روش باعث می‌شود در همان مراحل ابتدایی از تمام رنج‌ها پوشش بگیریم و اسکن ساعت‌ها داخل یک رنج بزرگ گیر نکند. رنج‌های کوچک پس از تمام شدن usable hostهایشان خودکار کنار گذاشته می‌شوند.
+
+Hard Scan همچنین:
+
+- network و broadcast را در subnetهای معمولی کنار می‌گذارد.
+- بعد از هر N IP checkpoint می‌سازد.
+- تعداد IPهای موفق و ناموفق را زنده نمایش می‌دهد.
 - با `Q` یا `Ctrl+C` امن متوقف می‌شود.
-- بعد از توقف، بهترین یافته‌های فعلی وارد مرحله `hard-finalize` می‌شوند؛ این مرحله همان ارزیابی واقعی tunnel/browsing/streaming است.
+- بعد از توقف، بهترین یافته‌ها را با tunnel/browsing/streaming نهایی می‌کند.
 - با `Resume Hard Scan` از cursor ذخیره‌شده ادامه می‌دهد.
 
-در نصب تازه Android، concurrency پیش‌فرض کمتر و فاصله checkpoint کوتاه‌تر است تا حرارت و احتمال از دست رفتن پیشرفت کاهش یابد.
+### سازگاری checkpoint قدیمی
+
+checkpointهایی که قبل از این تغییر ساخته شده‌اند از بین نمی‌روند و همچنان Resume می‌شوند، اما برای جلوگیری از تکرار یا جا افتادن IP، همان ترتیب قدیمی را تا پایان ادامه می‌دهند. هر Hard Scan جدید از روش range round-robin استفاده می‌کند.
 
 ---
 
@@ -147,25 +140,21 @@ npm run xray:install
 
 ## 1. Eligibility
 
-برای هر IP یک WebSocket Upgrade واقعی با host، path و port کانفیگ کاربر انجام می‌شود. مواردی مثل پاسخ HTTP 101، موفقیت roundها و زمان handshake ثبت می‌شوند.
-
-TCP connect فقط برای diagnostics ثبت می‌شود و به‌تنهایی معیار انتخاب بهترین IP نیست.
+برای هر IP یک WebSocket Upgrade واقعی با host، path و port کانفیگ کاربر انجام می‌شود. پاسخ HTTP 101، موفقیت roundها و زمان handshake ثبت می‌شوند. TCP connect فقط برای diagnostics است و به‌تنهایی معیار رتبه‌بندی نیست.
 
 ## 2. Tunnel
 
-از میان IPهای eligible، تعداد مشخصی finalist انتخاب می‌شوند. برای هر finalist:
+از میان IPهای eligible چند finalist انتخاب می‌شوند. برای هر finalist:
 
 1. Xray با همان IP بالا می‌آید.
-2. یک SOCKS محلی روی `127.0.0.1` ایجاد می‌شود.
-3. browsing workloads از داخل تونل اجرا می‌شوند.
-4. streaming workloads از داخل تونل اجرا می‌شوند.
-5. Xray متوقف و فایل موقت آن حذف می‌شود.
+2. SOCKS محلی روی `127.0.0.1` ایجاد می‌شود.
+3. browsing workload اجرا می‌شود.
+4. streaming workload اجرا می‌شود.
+5. Xray متوقف و فایل موقت حذف می‌شود.
 
-اگر `tunnel.limit = 5` و `tunnel.rounds = 1` باشد، progress این بخش 5 مرحله دارد؛ یعنی 5 IP منتخب، نه 5 نوع تست متفاوت.
+اگر `tunnel.limit = 5` و `tunnel.rounds = 1` باشد، progress پنج‌مرحله‌ای یعنی پنج IP منتخب، نه پنج نوع تست.
 
 ## 3. Browsing
-
-معیارهای اصلی:
 
 - cold page load
 - warm page load
@@ -173,7 +162,7 @@ TCP connect فقط برای diagnostics ثبت می‌شود و به‌تنها�
 - موفقیت منابع صفحه
 - پایداری زمانی (MAD)
 
-وزن داخلی browsing:
+وزن داخلی:
 
 - موفقیت منابع: 40٪
 - cold load: 15٪
@@ -183,16 +172,14 @@ TCP connect فقط برای diagnostics ثبت می‌شود و به‌تنها�
 
 ## 4. Streaming
 
-manifest واقعی HLS خوانده می‌شود و segmentها به‌صورت **ترتیبی** دانلود می‌شوند تا رفتار player طبیعی‌تر شبیه‌سازی شود.
-
-معیارها:
+manifest واقعی HLS خوانده می‌شود و segmentها به‌صورت ترتیبی دانلود می‌شوند.
 
 - segment success rate
 - startup delay
 - rebuffer ratio
-- P10 sustainable bitrate با safety factor
+- P10 sustainable bitrate
 
-وزن داخلی streaming:
+وزن داخلی:
 
 - موفقیت: 35٪
 - startup delay: 15٪
@@ -205,13 +192,11 @@ manifest واقعی HLS خوانده می‌شود و segmentها به‌صور�
 - Streaming: 40٪
 - Reliability: 15٪
 
-IPهایی که فقط eligibility دارند ولی browsing/streaming واقعی تولید نکرده‌اند، overall QoE گمراه‌کننده دریافت نمی‌کنند.
+IPهایی که فقط eligibility دارند ولی browsing/streaming واقعی ندارند، overall score گمراه‌کننده دریافت نمی‌کنند.
 
 ---
 
 # Workload Settings
-
-پیش‌فرض‌ها عمداً فقط متکی به Cloudflare نیستند:
 
 ### Browsing
 
@@ -225,21 +210,32 @@ IPهایی که فقط eligibility دارند ولی browsing/streaming واقع
 - `bitmovin-sintel`
 - `mux-test-hls`
 
-YouTube به‌عنوان workload ثابت استفاده نشده، چون URL عمومی و پایدار `.m3u8` برای benchmark unattended ارائه نمی‌کند و لینک‌های آن معمولاً token/expiry دارند.
-
-هر کاربر می‌تواند صفحه وب یا HLS دلخواه خود را اضافه کند. هرچه workload به مصرف واقعی کاربر نزدیک‌تر باشد، رتبه‌بندی کاربردی‌تر است.
+YouTube به‌عنوان workload ثابت استفاده نشده، چون URL عمومی و پایدار `.m3u8` برای benchmark unattended ندارد و لینک‌های آن معمولاً token/expiry دارند.
 
 ---
 
-# نکات مهم Android/Termux
+# Previous Results و Diagnostics
+
+## گزینه 9 — Previous Results
+
+تا 15 گزارش آخر را نمایش می‌دهد. روی ترمینال باریک Termux به‌جای جدول عریض، نمایش موبایل و چندخطی استفاده می‌شود.
+
+## گزینه 10 — Diagnostics
+
+جدیدترین فایل NDJSON را پیدا می‌کند و تعداد eventها، warningها و errorها را نشان می‌دهد. خطاها روی Termux به‌شکل فهرست باریک چاپ می‌شوند.
+
+پس از نمایش هرکدام، برنامه منتظر Enter می‌ماند تا خروجی فوراً زیر منوی بعدی گم نشود.
+
+---
+
+# نکات Android/Termux
 
 - root لازم نیست.
-- باینری `Xray-android-arm64-v8a` برای اکثر گوشی‌های جدید استفاده می‌شود.
-- `start-cfqoe.sh` هنگام اجرا wake lock می‌گیرد و هنگام خروج آزاد می‌کند.
-- برای اسکن طولانی، Battery Optimization مربوط به Termux را غیرفعال کنید.
-- اجرای پروژه از shared storage ممنوع است؛ Xray باید در Home ترموکس باشد.
-- progress bar با عرض صفحه موبایل تطبیق پیدا می‌کند.
-- Quick/Full/Hard Scan روی اینترنت همان گوشی اندازه‌گیری می‌شوند، بنابراین نتیجه نشان‌دهنده مسیر واقعی همان اپراتور یا Wi-Fi است.
+- برای اکثر گوشی‌ها `Xray-android-arm64-v8a` نصب می‌شود.
+- لانچر هنگام اجرا wake lock می‌گیرد و هنگام خروج آزاد می‌کند.
+- برای اسکن طولانی Battery Optimization مربوط به Termux را غیرفعال کنید.
+- پروژه را از shared storage اجرا نکنید.
+- در نصب تازه Android، concurrency کمتر و checkpointها پرتکرارتر هستند.
 
 ---
 
@@ -261,46 +257,34 @@ logs/run-<id>.ndjson            لاگ ساخت‌یافته
 
 - URI و UUID در گزارش‌ها و لاگ‌ها redact می‌شوند.
 - داده‌ها فقط روی دستگاه کاربر ذخیره می‌شوند.
-- فایل‌های موقت Xray بعد از هر candidate حذف می‌شوند.
-- فایل کانفیگ در Linux/Android با permission محدود ذخیره می‌شود و در Windows ACL محدود دریافت می‌کند.
-- Xray از منبع رسمی دانلود و در صورت امکان checksum آن بررسی می‌شود.
-
-اگر URI واقعی را در فضای عمومی منتشر کرده‌اید، UUID/کانفیگ را rotate کنید.
+- فایل‌های موقت Xray حذف می‌شوند.
+- فایل کانفیگ در Linux/Android permission محدود و در Windows ACL محدود دارد.
+- Xray از منبع رسمی دانلود و در صورت ارائه digest بررسی می‌شود.
 
 ---
 
 # خط فرمان
 
 ```bash
-cfqoe                       # منوی تعاملی
-cfqoe import "vless://..."  # وارد کردن کانفیگ
-cfqoe quick                 # اسکن سریع
-cfqoe scan                  # اسکن کامل
-cfqoe hard                  # اسکن ترتیبی و قابل ادامه
-cfqoe resume                # ادامه Hard Scan
-cfqoe check                 # بررسی سیستم
-cfqoe results               # آخرین رتبه‌بندی
-cfqoe diagnose              # خلاصه آخرین لاگ
-npm run xray:install        # نصب/اصلاح Xray
-npm test                    # اجرای تست‌ها
+cfqoe quick
+cfqoe scan
+cfqoe hard
+cfqoe resume
+cfqoe check
+cfqoe results
+cfqoe diagnose
+npm run xray:install
+npm test
 ```
-
-در Windows به‌جای `cfqoe` می‌توان از `node bin\\cfqoe.js` استفاده کرد.
 
 ---
 
 # دقت نتایج
 
-این روش از ping و burst speedtest به استفاده واقعی نزدیک‌تر است، چون WebSocket، Xray، HTTP و HLS واقعی را آزمایش می‌کند. با این حال نتیجه به ISP، Wi-Fi یا اپراتور، ساعت تست، workload و شرایط لحظه‌ای شبکه وابسته است. بهترین کاربرد ابزار، **رتبه‌بندی نسبی IPها روی همان دستگاه و همان اتصال در همان بازه زمانی** است.
+این روش از ping و burst speedtest به استفاده واقعی نزدیک‌تر است، اما نتیجه همچنان به ISP، Wi-Fi یا اپراتور، ساعت تست، workload و شرایط لحظه‌ای شبکه وابسته است. بهترین کاربرد ابزار، رتبه‌بندی نسبی IPها روی همان دستگاه و همان اتصال است.
 
 ---
 
 # لایسنس
 
-این پروژه تحت **CFQoE Source-Available Attribution Non-Commercial License 1.0** منتشر می‌شود:
-
-- استفاده، مطالعه و تغییر کد مجاز است.
-- استفاده از کد با ذکر منبع و حفظ attribution مجاز است.
-- فروش، بازفروش، sublicensing و انتشار مجدد به نام شخص دیگر مجاز نیست.
-
-متن کامل و الزام‌آور در فایل [LICENSE](LICENSE) قرار دارد.
+این پروژه تحت **CFQoE Source-Available Attribution Non-Commercial License 1.0** منتشر می‌شود. استفاده و تغییر با ذکر منبع مجاز است؛ فروش، بازفروش و انتشار مجدد به نام شخص دیگر مجاز نیست. متن کامل در [LICENSE](LICENSE) قرار دارد.

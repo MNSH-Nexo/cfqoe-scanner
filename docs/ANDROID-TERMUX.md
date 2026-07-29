@@ -37,8 +37,12 @@ bash install-termux.sh
 
 - Quick و Full در هر بار اجرا یک seed تازه می‌سازند، پس sampleها نباید دائماً یکسان باشند.
 - Quick فقط یک sample کوچک و Full یک sample بزرگ‌تر است؛ هیچ‌کدام قرار نیست کل catalog را در یک اجرا بررسی کنند.
-- Hard Scan برای پیمایش کامل طراحی شده و در هر pass یک usable IP از هر رنج می‌گیرد؛ بعد سراغ IP بعدی تمام رنج‌ها می‌رود.
-- checkpoint قدیمی با ترتیب قدیمی Resume می‌شود؛ Hard Scan تازه از range round-robin استفاده می‌کند.
+- Hard Scan در هر pass یک usable IP از هر رنج می‌گیرد؛ بعد سراغ IP بعدی تمام رنج‌ها می‌رود.
+- Hard Scan روی Termux به‌طور پیش‌فرض 6 IP از رنج‌های مختلف را هم‌زمان screen می‌کند.
+- sweep اولیه برای سرعت یک round دارد و 12 finalist برتر قبل از tunnel با roundهای کامل دوباره بررسی می‌شوند.
+- checkpoint قدیمی با ترتیب قدیمی Resume می‌شود، اما eligibility آن نیز به‌صورت موازی اجرا می‌شود.
+
+جزئیات فنی: [HARD-DEEP-SCAN.md](HARD-DEEP-SCAN.md)
 
 ## جلوگیری از قطع اسکن
 
@@ -50,11 +54,13 @@ bash install-termux.sh
 
 ## بهینه‌سازی موبایل
 
-- concurrency اولیه 6 است تا فشار CPU و حرارت کمتر شود.
+- Hard concurrency اولیه 6 است تا فشار CPU و حرارت کنترل شود.
 - checkpoint در نصب تازه هر 10 IP ذخیره می‌شود.
 - progress bar با عرض صفحه تطبیق پیدا می‌کند.
 - گزینه‌های 9 و 10 روی صفحه باریک خروجی چندخطی دارند.
 - همه خروجی‌ها زیر منوی فعلی باقی می‌مانند تا کاربر Enter بزند.
+
+اگر گوشی بیش از حد گرم شد، از `Scan Settings` مقدار `Hard concurrent IPs` را به 3 یا 4 کاهش دهید.
 
 ## مصرف باتری و اینترنت
 

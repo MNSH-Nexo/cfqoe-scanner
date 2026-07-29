@@ -107,8 +107,8 @@ test('writeReport persists json, latest and a plain ranking', () => {
 
   const parsed = JSON.parse(fs.readFileSync(written.jsonPath, 'utf8'));
   assert.equal(parsed.schema, REPORT_SCHEMA);
-  assert.equal(parsed.schema, 6);
-  assert.equal(parsed.version, '0.6.0');
+  assert.equal(parsed.schema, 7);
+  assert.equal(parsed.version, '0.7.0');
   assert.equal(parsed.scope, 'run-relative');
   assert.equal(parsed.totals.candidates, 1);
   assert.equal(parsed.totals.complete, 1);

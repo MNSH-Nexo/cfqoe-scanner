@@ -7,6 +7,7 @@ import { runInterleaved } from './scheduler.js';
 import { runEligibilityBatch, runAdaptiveEligibilityBatch, selectDelayedRetries } from './hard-scheduler.js';
 import { probeBrowsing } from './browsing/probe.js';
 import { probeStreaming } from './streaming/probe.js';
+import { runLoadProbe } from './probe/load.js';
 import { startXray } from './xray/manager.js';
 import { locateXray } from './platform/xray.js';
 import { buildCandidateSummary, writeReport } from './report.js';
@@ -122,6 +123,7 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
       for (const { candidate } of selected) {
         const browsing = [];
         const streaming = [];
+        const load = [];
         for (let round = 1; round <= effectiveSettings.tunnel.rounds; round += 1) {
           let tunnel = null;
           try {
@@ -142,12 +144,34 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
               variantMode: effectiveSettings.streaming.variantMode,
               targetMbps: effectiveSettings.streaming.targetMbps, logger,
             }));
+            if (effectiveSettings.load?.enabled) {
+              const loadResult = await runLoadProbe({
+                proxy: tunnel.socks,
+                endpoints: effectiveSettings.load.endpoints,
+                durationMs: effectiveSettings.load.durationMs,
+                chunkBytes: effectiveSettings.load.chunkBytes,
+                uploadBytes: effectiveSettings.load.uploadBytes,
+                fanoutRequests: effectiveSettings.load.fanoutRequests,
+                idleSamples: effectiveSettings.load.idleSamples,
+                timeoutMs: effectiveSettings.load.timeoutMs,
+              });
+              load.push(loadResult);
+              logger.info('load.probe', {
+                ip: candidate.ip, round,
+                bytes: (loadResult.downlink?.totalBytes || 0) + (loadResult.uplink?.totalBytes || 0),
+                sustainedMbps: loadResult.downlink?.sustainedMbps ?? null,
+                shapingRatio: loadResult.downlink?.shapingRatio ?? null,
+                loadedRttMs: loadResult.latency?.loadedRttMs ?? null,
+                rttInflation: loadResult.latency?.rttInflation ?? null,
+                uplinkMbps: loadResult.uplink?.sustainedMbps ?? null,
+              });
+            }
           } catch (error) { logger.warn('tunnel.failed', { ip: candidate.ip, round, error: error.message }); }
           finally { await tunnel?.stop(); }
           completed += 1;
           onProgress({ phase: 'tunnel', completed, total, ip: candidate.ip });
         }
-        tunnelResults.set(candidate.ip, { browsing, streaming });
+        tunnelResults.set(candidate.ip, { browsing, streaming, load });
       }
     }
   }
@@ -158,7 +182,12 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
       ip: candidate.ip, range: candidate.range,
       eligibility: verification || observationMap.get(candidate.ip) || [],
       tunnel: tunnelResults.get(candidate.ip) || null,
-      requirements: { browsing: effectiveSettings.browsing.enabled, streaming: effectiveSettings.streaming.enabled },
+      requirements: {
+        browsing: effectiveSettings.browsing.enabled,
+        streaming: effectiveSettings.streaming.enabled,
+        load: Boolean(effectiveSettings.load?.enabled),
+      },
+      gateOverrides: effectiveSettings.load?.gates,
       temporalBlocks: 1,
     });
     summary.selection = {
@@ -178,7 +207,7 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
   logger.info('scan.complete', {
     runId, candidates: summaries.length, eligible: verifiedEligible.length,
     independentlyVerified: verificationMap.size, tunnelTested: tunnelResults.size,
-    samplingSeed, report: written.jsonPath,
+    samplingSeed, report: written.jsonPath, bytesMeasured: written.report.totals.bytesMeasured,
   });
   return {
     ...written, xray: xrayInfo, eligibleCount: verifiedEligible.length,

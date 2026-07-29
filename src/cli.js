@@ -39,6 +39,9 @@ ${color.bold('Scan options')}
   --no-tunnel           skip the VLESS tunnel stage
   --no-browsing         skip web transfer workloads
   --no-streaming        skip streaming workloads
+  --no-load             skip the real-load stage (multi-megabyte transfer)
+  --load-duration N     seconds of sustained download per observation
+  --load-chunk-mb N     download chunk size in megabytes
   --xray-path PATH      explicit Xray executable
   --debug               verbose structured logging
 
@@ -57,7 +60,7 @@ function parseArgs(argv) {
       continue;
     }
     const name = token.slice(2);
-    const numeric = ['max', 'rounds', 'tunnel-limit', 'tunnel-rounds', 'segments', 'concurrency', 'verify-limit'];
+    const numeric = ['max', 'rounds', 'tunnel-limit', 'tunnel-rounds', 'segments', 'concurrency', 'verify-limit', 'load-duration', 'load-chunk-mb'];
     if (numeric.includes(name) || name === 'xray-path' || name === 'log-level') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for --${name}`);
@@ -104,6 +107,11 @@ function applyOptions(settings, options) {
   if (options.flags.has('no-tunnel')) next.tunnel.enabled = false;
   if (options.flags.has('no-browsing')) next.browsing.enabled = false;
   if (options.flags.has('no-streaming')) next.streaming.enabled = false;
+  if (options.flags.has('no-load')) next.load.enabled = false;
+  const loadDuration = number('load-duration');
+  if (loadDuration) next.load.durationMs = loadDuration * 1000;
+  const loadChunk = number('load-chunk-mb');
+  if (loadChunk) next.load.chunkBytes = loadChunk * 1024 * 1024;
   if (options.values.has('xray-path')) next.tunnel.xrayPath = options.values.get('xray-path');
   if (options.flags.has('debug')) next.logging.level = 'debug';
   if (options.values.has('log-level')) next.logging.level = options.values.get('log-level');
@@ -125,13 +133,19 @@ function printRanking(results, limit = 15) {
       item.eligibility.confidence || '-',
       item.eligibility.pops?.dominant || '-',
       item.streaming?.quality || '-',
+      item.verdict?.label || '-',
+      item.load?.sustainedMbps ?? '-',
+      item.load?.shapingRatio ?? '-',
+      item.load?.loadedRttMs ?? '-',
+      item.measurement?.bytesMeasured ? `${Math.round(item.measurement.bytesMeasured / (1024 * 1024))}MB` : '-',
     ]);
   if (rows.length === 0) {
     console.log(color.yellow('No candidates were measured.'));
     return;
   }
-  console.log(table(rows, ['IP', 'Overall', 'Conserv', 'Transfer', 'Stream', 'Success', 'Lower95', 'Confidence', 'POP', 'Quality']));
-  console.log(color.dim('\nRanks are run-relative. Confidence reflects sample size, spread over time and the Wilson lower bound.'));
+  console.log(table(rows, ['IP', 'Overall', 'Conserv', 'Transfer', 'Stream', 'Success', 'Lower95', 'Confidence', 'POP', 'Quality', 'Verdict', 'Mbps', 'Shaping', 'RTT-load', 'Traffic']));
+  console.log(color.dim('\nMbps/Shaping/RTT-load come from the real-load stage (multi-megabyte transfer). Verdict applies absolute gates: a capped score can never look good.'));
+  console.log(color.dim('Ranks are run-relative. Confidence reflects sample size, spread over time and the Wilson lower bound.'));
 }
 
 async function commandScan(options, { profile }) {

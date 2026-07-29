@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildEligibilitySummary, applyTunnelResults, rankCandidates, REPORT_SCHEMA } from '../src/report.js';
 
 test('report schema preserves uncertainty, POP and error classes', () => {
-  assert.equal(REPORT_SCHEMA, 6);
+  assert.equal(REPORT_SCHEMA, 7);
   const summary = buildEligibilitySummary({
     ip: '1.1.1.1', range: '1.1.1.0/24',
     eligibility: [

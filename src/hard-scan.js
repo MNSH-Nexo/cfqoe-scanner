@@ -12,6 +12,7 @@ import { loadCatalog, resolveWorkloads } from './config/settings.js';
 import { probeBrowsing } from './browsing/probe.js';
 import { probeStreaming } from './streaming/probe.js';
 import { applyTunnelResults, buildEligibilitySummary, rankCandidates, renderTopList, REPORT_SCHEMA, GENERATOR_VERSION } from './report.js';
+import { runLoadProbe } from './probe/load.js';
 
 export const HARD_STATE_VERSION = 3;
 
@@ -229,6 +230,7 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
   for (const candidate of selected) {
     const browsing = [];
     const streaming = [];
+    const load = [];
     for (let round = 1; round <= settings.tunnel.rounds; round += 1) {
       let tunnel = null;
       try {
@@ -263,6 +265,27 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
             logger,
           }));
         }
+        if (settings.load?.enabled) {
+          const loadResult = await runLoadProbe({
+            proxy: tunnel.socks,
+            endpoints: settings.load.endpoints,
+            durationMs: settings.load.durationMs,
+            chunkBytes: settings.load.chunkBytes,
+            uploadBytes: settings.load.uploadBytes,
+            fanoutRequests: settings.load.fanoutRequests,
+            idleSamples: settings.load.idleSamples,
+            timeoutMs: settings.load.timeoutMs,
+          });
+          load.push(loadResult);
+          logger.info('hard.load.probe', {
+            ip: candidate.ip,
+            round,
+            bytes: (loadResult.downlink?.totalBytes || 0) + (loadResult.uplink?.totalBytes || 0),
+            sustainedMbps: loadResult.downlink?.sustainedMbps ?? null,
+            shapingRatio: loadResult.downlink?.shapingRatio ?? null,
+            loadedRttMs: loadResult.latency?.loadedRttMs ?? null,
+          });
+        }
       } catch (error) {
         logger.warn('hard.tunnel.failed', { ip: candidate.ip, round, error: error.message });
       } finally {
@@ -271,7 +294,7 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
       completed += 1;
       onProgress({ phase: 'hard-finalize', completed, total, eligible: selected.length, failed: 0, currentRange: candidate.range, note: candidate.ip });
     }
-    tunnelResults.set(candidate.ip, { browsing, streaming });
+    tunnelResults.set(candidate.ip, { browsing, streaming, load });
   }
 
   return { xrayInfo, tunnelResults };
@@ -625,8 +648,17 @@ export async function runHardScan({
     vless,
     onProgress,
   });
-  const requirements = { browsing: settings.browsing.enabled, streaming: settings.streaming.enabled };
-  const finalCandidates = topEligibility.map((item) => applyTunnelResults(item, tunnelResults.get(item.ip) || null, requirements));
+  const requirements = {
+    browsing: settings.browsing.enabled,
+    streaming: settings.streaming.enabled,
+    load: Boolean(settings.load?.enabled),
+  };
+  const finalCandidates = topEligibility.map((item) => applyTunnelResults(
+    item,
+    tunnelResults.get(item.ip) || null,
+    requirements,
+    { gateOverrides: settings.load?.gates },
+  ));
   const result = writeHardReport({
     layout,
     state,

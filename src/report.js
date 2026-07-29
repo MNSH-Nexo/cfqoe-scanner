@@ -5,11 +5,10 @@ import { wilsonInterval, confidenceLabel, summarizePops } from './measurement/co
 import { summarizeProbeErrors } from './probe/errors.js';
 import { evaluateGates, capScore, buildVerdict, GATE_DEFINITIONS } from './measurement/gates.js';
 
-export const REPORT_SCHEMA = 8;
-export const GENERATOR_VERSION = '0.8.0';
+export const REPORT_SCHEMA = 9;
+export const GENERATOR_VERSION = '0.8.1';
 
 export const VERDICT_RANK = { recommended: 0, good: 1, usable: 2, 'browsing-only': 3, unverified: 4, unusable: 5 };
-
 const GATE_LABELS = new Map(GATE_DEFINITIONS.map((definition) => [definition.name, definition.label]));
 
 export function buildEligibilitySummary({ ip, range, eligibility, temporalBlocks = 1 }) {
@@ -23,15 +22,13 @@ export function buildEligibilitySummary({ ip, range, eligibility, temporalBlocks
   return {
     ip, range,
     eligibility: {
-      attempts, successes, successRate: round(successRate, 3),
-      confidence95,
+      attempts, successes, successRate: round(successRate, 3), confidence95,
       confidence: confidenceLabel({ attempts, successes, temporalBlocks }),
       handshakeMedianMs: round(median(handshakes), 2),
       handshakeP90Ms: round(percentile(handshakes, 90), 2),
       handshakeMadMs: round(mad(handshakes), 2),
       connectMedianMs: round(median(connects), 2),
-      pops: summarizePops(successful),
-      errors: summarizeProbeErrors(eligibility),
+      pops: summarizePops(successful), errors: summarizeProbeErrors(eligibility),
     },
   };
 }
@@ -44,6 +41,8 @@ function summarizeBrowsing(items) {
     warmMedianMs: round(median(items.map((item) => item.warmMs)), 2),
     ttfbP90Ms: round(median(items.map((item) => item.ttfbP90Ms)), 2),
     successRate: round(median(items.map((item) => item.successRate)), 3),
+    scoredObservations: items.filter((item) => Number.isFinite(item.score)).length,
+    errors: items.filter((item) => item.error).map((item) => ({ workload: item.workload, error: item.error })),
     bytes: items.reduce((total, item) => total + (item.bytes || 0), 0),
   };
 }
@@ -60,6 +59,8 @@ function summarizeStreaming(items) {
     ladderLimited: items.some((item) => item.ladderLimited),
     startupDelaySec: round(median(items.map((item) => item.startupDelaySec)), 3),
     rebufferRatio: round(median(items.map((item) => item.rebufferRatio)), 4),
+    scoredObservations: items.filter((item) => Number.isFinite(item.score)).length,
+    errors: items.filter((item) => item.error).map((item) => ({ workload: item.workload, error: item.error })),
     bytes: items.reduce((total, item) => total + (item.bytes || 0), 0),
   };
 }
@@ -71,10 +72,7 @@ function medianOf(items, pick) {
 export function summarizeLoad(items) {
   const usable = (items || []).filter((item) => item && item.ok);
   if (usable.length === 0) return null;
-  const bytes = usable.reduce(
-    (total, item) => total + (item.downlink?.totalBytes || 0) + (item.uplink?.totalBytes || 0),
-    0,
-  );
+  const bytes = usable.reduce((total, item) => total + (item.downlink?.totalBytes || 0) + (item.uplink?.totalBytes || 0), 0);
   const metrics = {
     flows: usable.find((item) => item.downlink?.flows)?.downlink?.flows ?? null,
     sustainedMbps: round(medianOf(usable, (item) => item.downlink?.sustainedMbps), 2),
@@ -119,15 +117,10 @@ export function scoreLoad(load) {
 function gateMetricsFrom(load) {
   if (!load) return {};
   return {
-    sustainedMbps: load.sustainedMbps,
-    shapingRatio: load.shapingRatio,
-    rpm: load.rpm,
-    rttIncreaseMs: load.rttIncreaseMs,
-    rttInflation: load.rttInflation,
-    jitterMs: load.jitterMs,
-    lossRate: load.lossRate,
-    fanoutSuccess: load.fanoutSuccess,
-    freshConnectionMs: load.freshConnectionMs,
+    sustainedMbps: load.sustainedMbps, shapingRatio: load.shapingRatio, rpm: load.rpm,
+    rttIncreaseMs: load.rttIncreaseMs, rttInflation: load.rttInflation,
+    jitterMs: load.jitterMs, lossRate: load.lossRate,
+    fanoutSuccess: load.fanoutSuccess, freshConnectionMs: load.freshConnectionMs,
     uplinkMbps: load.uplinkMbps,
   };
 }
@@ -141,12 +134,7 @@ export function limitingFactor(gates) {
   return `${label}: ${value}`;
 }
 
-export function applyTunnelResults(
-  summary,
-  tunnel,
-  requirements = { browsing: true, streaming: true, load: false },
-  options = {},
-) {
+export function applyTunnelResults(summary, tunnel, requirements = { browsing: true, streaming: true, load: false }, options = {}) {
   const browsingScores = (tunnel?.browsing || []).map((item) => item.score).filter(Number.isFinite);
   const streamingScores = (tunnel?.streaming || []).map((item) => item.score).filter(Number.isFinite);
   const browsingScore = browsingScores.length ? round(median(browsingScores), 1) : null;
@@ -154,84 +142,67 @@ export function applyTunnelResults(
   const load = summarizeLoad(tunnel?.load || []);
   const loadScore = scoreLoad(load);
   const loadRequired = Boolean(requirements.load);
-
-  const components = loadRequired
-    ? [
-      { name: 'browsing', score: browsingScore === null ? null : browsingScore / 100, weight: requirements.browsing ? 30 : 0 },
-      { name: 'streaming', score: streamingScore === null ? null : streamingScore / 100, weight: requirements.streaming ? 30 : 0 },
-      { name: 'load', score: loadScore === null ? null : loadScore / 100, weight: 25 },
-      { name: 'reliability', score: summary.eligibility.successRate, weight: 15 },
-    ]
-    : [
-      { name: 'browsing', score: browsingScore === null ? null : browsingScore / 100, weight: requirements.browsing ? 45 : 0 },
-      { name: 'streaming', score: streamingScore === null ? null : streamingScore / 100, weight: requirements.streaming ? 40 : 0 },
-      { name: 'reliability', score: summary.eligibility.successRate, weight: 15 },
-    ];
-
+  const components = loadRequired ? [
+    { name: 'browsing', score: browsingScore === null ? null : browsingScore / 100, weight: requirements.browsing ? 30 : 0 },
+    { name: 'streaming', score: streamingScore === null ? null : streamingScore / 100, weight: requirements.streaming ? 30 : 0 },
+    { name: 'load', score: loadScore === null ? null : loadScore / 100, weight: 25 },
+    { name: 'reliability', score: summary.eligibility.successRate, weight: 15 },
+  ] : [
+    { name: 'browsing', score: browsingScore === null ? null : browsingScore / 100, weight: requirements.browsing ? 45 : 0 },
+    { name: 'streaming', score: streamingScore === null ? null : streamingScore / 100, weight: requirements.streaming ? 40 : 0 },
+    { name: 'reliability', score: summary.eligibility.successRate, weight: 15 },
+  ];
   const required = components.filter((item) => item.weight > 0);
   const present = required.filter((item) => Number.isFinite(item.score));
   const completeness = required.length ? present.length / required.length : 0;
-  const rawOverall = weightedScore(components, { requireAll: true });
-  const rawConservative = rawOverall === null ? null : weightedScore(components.map((item) =>
-    item.name === 'reliability' ? { ...item, score: summary.eligibility.confidence95.lower } : item
-  ), { requireAll: true });
-
-  const gates = loadRequired
-    ? evaluateGates(gateMetricsFrom(load), {
-      overrides: options.gateOverrides,
-      profile: options.gateProfile,
-    })
-    : null;
-  const overall = gates ? capScore(rawOverall, gates) : rawOverall;
-  const conservative = gates ? capScore(rawConservative, gates) : rawConservative;
-  const verdict = gates
-    ? buildVerdict({
-      gateResult: gates,
-      cappedScore: conservative,
-      streamingScore,
-      confidence: summary.eligibility.confidence,
-    })
-    : null;
-
+  const complete = required.length > 0 && present.length === required.length;
+  const measuredQoE = present.some((item) => item.name !== 'reliability');
+  const rawOverall = measuredQoE ? weightedScore(components, { requireAll: complete }) : null;
+  const conservativeComponents = components.map((item) => item.name === 'reliability' ? { ...item, score: summary.eligibility.confidence95.lower } : item);
+  const rawConservative = rawOverall === null ? null : weightedScore(conservativeComponents, { requireAll: complete });
+  const gates = loadRequired ? evaluateGates(gateMetricsFrom(load), { overrides: options.gateOverrides, profile: options.gateProfile }) : null;
+  const gatedOverall = gates ? capScore(rawOverall, gates) : rawOverall;
+  const gatedConservative = gates ? capScore(rawConservative, gates) : rawConservative;
+  const overall = !complete && Number.isFinite(gatedOverall) ? Math.min(gatedOverall, 70) : gatedOverall;
+  const conservative = !complete && Number.isFinite(gatedConservative) ? Math.min(gatedConservative, 70) : gatedConservative;
+  const verdict = gates ? buildVerdict({ gateResult: gates, cappedScore: conservative, streamingScore, confidence: summary.eligibility.confidence }) : null;
   return {
     ...summary,
     browsing: summarizeBrowsing(tunnel?.browsing || []),
-    streaming: summarizeStreaming(tunnel?.streaming || []),
-    load,
-    gates,
-    verdict,
+    streaming: summarizeStreaming(tunnel?.streaming || []), load, gates,
+    verdict: !complete && verdict?.label !== 'unusable' ? {
+      label: 'unverified', summary: 'Measured partially; one or more required workloads did not produce a score.',
+      limiting: verdict?.limiting || null,
+      reasons: required.filter((item) => !Number.isFinite(item.score)).map((item) => `${item.name} was not scored`),
+    } : verdict,
     limitingFactor: limitingFactor(gates),
     measurement: {
-      status: rawOverall === null ? 'incomplete' : 'complete',
+      status: complete ? 'complete' : measuredQoE ? 'partial' : 'unmeasured',
       completeness: round(completeness, 3),
-      bytesMeasured: (load?.bytes || 0)
-        + (summarizeBrowsing(tunnel?.browsing || [])?.bytes || 0)
-        + (summarizeStreaming(tunnel?.streaming || [])?.bytes || 0),
+      missingComponents: required.filter((item) => !Number.isFinite(item.score)).map((item) => item.name),
+      bytesMeasured: (load?.bytes || 0) + (summarizeBrowsing(tunnel?.browsing || [])?.bytes || 0) + (summarizeStreaming(tunnel?.streaming || [])?.bytes || 0),
       experimental: true,
     },
     scores: {
-      browsing: browsingScore, streaming: streamingScore,
-      load: loadScore,
+      browsing: browsingScore, streaming: streamingScore, load: loadScore,
       reliability: round(summary.eligibility.successRate * 100, 1),
       reliabilityLower95: round(summary.eligibility.confidence95.lower * 100, 1),
-      overall, conservative,
-      overallUncapped: rawOverall, conservativeUncapped: rawConservative,
+      overall, conservative, overallUncapped: rawOverall, conservativeUncapped: rawConservative,
     },
   };
 }
 
 export function buildCandidateSummary({ ip, range, eligibility, tunnel, requirements, temporalBlocks, gateOverrides, gateProfile }) {
-  return applyTunnelResults(
-    buildEligibilitySummary({ ip, range, eligibility, temporalBlocks }),
-    tunnel,
-    requirements,
-    { gateOverrides, gateProfile },
-  );
+  return applyTunnelResults(buildEligibilitySummary({ ip, range, eligibility, temporalBlocks }), tunnel, requirements, { gateOverrides, gateProfile });
 }
 
 export function rankCandidates(summaries) {
   return summaries.slice().sort((a, b) => {
-    if (a.measurement.status !== b.measurement.status) return a.measurement.status === 'complete' ? -1 : 1;
+    const evidenceRank = { complete: 0, partial: 1, incomplete: 2, unmeasured: 2 };
+    const evidenceA = evidenceRank[a.measurement.status] ?? 3;
+    const evidenceB = evidenceRank[b.measurement.status] ?? 3;
+    if (evidenceA !== evidenceB) return evidenceA - evidenceB;
+    if ((b.measurement.completeness ?? 0) !== (a.measurement.completeness ?? 0)) return (b.measurement.completeness ?? 0) - (a.measurement.completeness ?? 0);
     const verdictA = VERDICT_RANK[a.verdict?.label] ?? 4;
     const verdictB = VERDICT_RANK[b.verdict?.label] ?? 4;
     if (verdictA !== verdictB) return verdictA - verdictB;
@@ -260,14 +231,15 @@ export function writeReport({ directory, runId, target, settings, candidates, st
       candidates: ranked.length,
       eligible: ranked.filter((item) => item.eligibility.successRate > 0).length,
       complete: ranked.filter((item) => item.measurement.status === 'complete').length,
+      partial: ranked.filter((item) => item.measurement.status === 'partial').length,
+      unmeasured: ranked.filter((item) => item.measurement.status === 'unmeasured').length,
       highConfidence: ranked.filter((item) => item.eligibility.confidence === 'high').length,
       gatePassed: ranked.filter((item) => item.gates?.status === 'pass').length,
       gateFailed: ranked.filter((item) => item.gates?.status === 'fail').length,
       recommended: ranked.filter((item) => item.verdict?.label === 'recommended').length,
       bytesMeasured: ranked.reduce((total, item) => total + (item.measurement?.bytesMeasured || 0), 0),
       limitingFactors: countLimitingFactors(ranked),
-    },
-    results: ranked,
+    }, results: ranked,
   };
   const jsonPath = path.join(directory, `run-${runId}.json`);
   const latestPath = path.join(directory, 'latest.json');
@@ -290,17 +262,10 @@ export function countLimitingFactors(ranked) {
 export function renderTopList(ranked, limit = 20) {
   const header = ['IP', 'Verdict', 'Conservative', 'Overall', 'Mbps', 'RPM', 'Shaping', 'AddedRTT', 'Confidence', 'POP', 'Limiting'].join('\t');
   const lines = ranked.slice(0, limit).map((item) => [
-    item.ip,
-    item.verdict?.label || item.measurement.status,
-    item.scores.conservative ?? '-',
-    item.scores.overall ?? '-',
-    item.load?.sustainedMbps ?? '-',
-    item.load?.rpm ?? '-',
-    item.load?.shapingRatio ?? '-',
-    item.load?.rttIncreaseMs ?? '-',
-    item.eligibility.confidence,
-    item.eligibility.pops.dominant || '-',
-    item.gates?.limiting || '-',
+    item.ip, item.verdict?.label || item.measurement.status,
+    item.scores.conservative ?? '-', item.scores.overall ?? '-',
+    item.load?.sustainedMbps ?? '-', item.load?.rpm ?? '-', item.load?.shapingRatio ?? '-', item.load?.rttIncreaseMs ?? '-',
+    item.eligibility.confidence, item.eligibility.pops.dominant || '-', item.gates?.limiting || '-',
   ].join('\t'));
   return [header, ...lines].join('\n');
 }

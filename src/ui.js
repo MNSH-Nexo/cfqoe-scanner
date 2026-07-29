@@ -25,9 +25,15 @@ export function progressBar({ completed, total, width = 28 }) {
   return `[${'#'.repeat(filled)}${'-'.repeat(width - filled)}] ${Math.round(ratio * 100)}%`;
 }
 
-function terminalWidth() {
+export function terminalWidth() {
   const columns = Number(process.stdout.columns);
   return Number.isFinite(columns) && columns > 20 ? columns : 120;
+}
+
+export function clearScreen() {
+  if (!process.stdout.isTTY) return;
+  readline.cursorTo(process.stdout, 0, 0);
+  readline.clearScreenDown(process.stdout);
 }
 
 function redrawLine(text) {

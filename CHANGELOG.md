@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- First-class Android/Termux support for arm64 phones and x64 Android environments.
+- Official Android Xray-core archive detection and automatic installation.
+- `install-termux.sh` for dependency setup, Xray installation, and first launch.
+- Automatic Termux wake lock while the scanner is running.
+- SHA-256 verification when GitHub release metadata provides an Xray digest.
+
+### Changed
+- Progress rendering adapts to narrow mobile terminals without wrapping.
+- New Android installations use lower eligibility concurrency and more frequent Hard Scan checkpoints.
+- The launcher detects incompatible Xray binaries and replaces them with the correct platform build.
+
 ## 0.5.0
 
 Complete rewrite as a desktop tool. The scanner now runs on your own Windows or Linux

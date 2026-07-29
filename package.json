@@ -3,19 +3,15 @@
   "version": "0.5.0",
   "description": "Portable Cloudflare edge quality scanner ranked by real browsing and streaming QoE",
   "type": "module",
-  "bin": {
-    "cfqoe": "bin/cfqoe.js"
-  },
+  "bin": { "cfqoe": "bin/cfqoe.js" },
   "main": "src/cli.js",
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "scripts": {
     "start": "node bin/cfqoe.js menu",
     "check": "node --check src/cli.js",
     "test": "node --test --test-timeout=20000 test/*.test.js",
     "xray:install": "node scripts/install-xray.mjs"
   },
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "private": false
 }

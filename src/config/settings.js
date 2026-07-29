@@ -1,53 +1,53 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const DEFAULT_SETTINGS = {
-  version: 1,
-  scan: {
-    perRange: 3,
-    maxCandidates: 120,
-    rounds: 3,
-    concurrency: 12,
-    timeoutMs: 6000,
-    minimumSuccessRate: 0.6,
-    seed: 404,
-  },
-  tunnel: {
-    enabled: true,
-    xrayPath: 'auto',
-    limit: 5,
-    rounds: 1,
-    concurrency: 1,
-    startupTimeoutMs: 8000,
-    shutdownGraceMs: 1500,
-  },
-  browsing: {
-    enabled: true,
-    workloads: ['wikipedia'],
-    assetLimit: 6,
-    timeoutMs: 15000,
-  },
-  streaming: {
-    enabled: true,
-    workloads: ['apple-bipbop'],
-    maxSegments: 3,
-    startupBufferSec: 4,
-    safetyFactor: 1.25,
-    timeoutMs: 25000,
-  },
-  hard: {
-    saveEvery: 25,
-    liveTop: 30,
-    finalTop: 200,
-  },
-  customWorkloads: {
-    browsing: [],
-    streaming: [],
-  },
-  logging: {
-    level: 'info',
-  },
-};
+export function createDefaultSettings(platform = process.platform) {
+  const android = platform === 'android';
+  return {
+    version: 1,
+    scan: {
+      perRange: 3,
+      maxCandidates: 120,
+      rounds: 3,
+      concurrency: android ? 6 : 12,
+      timeoutMs: 6000,
+      minimumSuccessRate: 0.6,
+      seed: 404,
+    },
+    tunnel: {
+      enabled: true,
+      xrayPath: 'auto',
+      limit: 5,
+      rounds: 1,
+      concurrency: 1,
+      startupTimeoutMs: 8000,
+      shutdownGraceMs: 1500,
+    },
+    browsing: {
+      enabled: true,
+      workloads: ['wikipedia'],
+      assetLimit: 6,
+      timeoutMs: 15000,
+    },
+    streaming: {
+      enabled: true,
+      workloads: ['apple-bipbop'],
+      maxSegments: 3,
+      startupBufferSec: 4,
+      safetyFactor: 1.25,
+      timeoutMs: 25000,
+    },
+    hard: {
+      saveEvery: android ? 10 : 25,
+      liveTop: 30,
+      finalTop: 200,
+    },
+    customWorkloads: { browsing: [], streaming: [] },
+    logging: { level: 'info' },
+  };
+}
+
+export const DEFAULT_SETTINGS = createDefaultSettings();
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -65,8 +65,7 @@ export function mergeSettings(base, override) {
 
 export function loadSettings(settingsFile) {
   try {
-    const raw = fs.readFileSync(settingsFile, 'utf8');
-    return mergeSettings(DEFAULT_SETTINGS, JSON.parse(raw));
+    return mergeSettings(DEFAULT_SETTINGS, JSON.parse(fs.readFileSync(settingsFile, 'utf8')));
   } catch {
     return mergeSettings(DEFAULT_SETTINGS, {});
   }
@@ -81,11 +80,9 @@ export function saveSettings(settingsFile, settings) {
 export function resolveWorkloads({ settings, catalog, kind }) {
   const selected = settings[kind]?.workloads || [];
   const custom = settings.customWorkloads?.[kind] || [];
-  const builtIn = (catalog[kind] || []).filter((item) => selected.includes(item.name));
-  return [...builtIn, ...custom];
+  return [...(catalog[kind] || []).filter((item) => selected.includes(item.name)), ...custom];
 }
 
 export function loadCatalog(workloadsFile) {
-  const raw = fs.readFileSync(workloadsFile, 'utf8');
-  return JSON.parse(raw);
+  return JSON.parse(fs.readFileSync(workloadsFile, 'utf8'));
 }

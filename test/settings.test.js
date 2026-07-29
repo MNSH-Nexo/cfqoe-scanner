@@ -3,20 +3,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  DEFAULT_SETTINGS,
-  mergeSettings,
-  loadSettings,
-  saveSettings,
-  resolveWorkloads,
-  loadCatalog,
-} from '../src/config/settings.js';
+import { DEFAULT_SETTINGS, createDefaultSettings, mergeSettings, loadSettings, saveSettings, resolveWorkloads, loadCatalog } from '../src/config/settings.js';
 
 test('mergeSettings merges nested objects without mutating defaults', () => {
   const merged = mergeSettings(DEFAULT_SETTINGS, { scan: { rounds: 9 } });
   assert.equal(merged.scan.rounds, 9);
   assert.equal(merged.scan.maxCandidates, DEFAULT_SETTINGS.scan.maxCandidates);
-  assert.equal(DEFAULT_SETTINGS.scan.rounds, 2);
+  assert.equal(DEFAULT_SETTINGS.scan.rounds, 3);
+});
+
+test('Android defaults reduce contention and checkpoint more often', () => {
+  const android = createDefaultSettings('android');
+  const desktop = createDefaultSettings('linux');
+  assert.equal(android.scan.concurrency, 6);
+  assert.equal(desktop.scan.concurrency, 12);
+  assert.equal(android.hard.saveEvery, 10);
+  assert.equal(desktop.hard.saveEvery, 25);
 });
 
 test('loadSettings falls back to defaults for missing or broken files', () => {

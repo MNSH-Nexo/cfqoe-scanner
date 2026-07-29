@@ -8,7 +8,7 @@ import { locateXray, xrayVersion, xrayInstallHint } from './platform/xray.js';
 import { createLogger, summarizeLogFile } from './logging/logger.js';
 import { runScan } from './scan.js';
 import { runHardScan } from './hard-scan.js';
-import { runMenu, quickProfile } from './menu/index.js';
+import { runMenu, quickProfile, researchProfile } from './menu/index.js';
 
 const HELP = `${banner()}
 
@@ -17,7 +17,8 @@ ${color.bold('Usage')}
   cfqoe menu                same as above
   cfqoe scan [options]      run a full scan
   cfqoe quick [options]     run a reduced scan
-  cfqoe hard [options]      run the sequential resumable hard scan
+  cfqoe research [options]  run the slow high-confidence scan
+  cfqoe hard [options]      run the resumable hard deep scan
   cfqoe resume [options]    resume the last hard scan
   cfqoe import <vless-uri>  store the configuration locally
   cfqoe check               verify Node, Xray and stored configuration
@@ -31,15 +32,20 @@ ${color.bold('Scan options')}
   --tunnel-limit N      candidates measured through the real tunnel
   --tunnel-rounds N     observations per candidate
   --segments N          streaming segments per observation
+  --verify-limit N      finalists sent to independent verification
+  --no-verify           skip independent verification (faster, weaker evidence)
+  --no-retry            skip the delayed retry of transient failures
+  --abr                 let the streaming probe adapt its variant
   --no-tunnel           skip the VLESS tunnel stage
-  --no-browsing         skip page-loading workloads
+  --no-browsing         skip web transfer workloads
   --no-streaming        skip streaming workloads
   --xray-path PATH      explicit Xray executable
   --debug               verbose structured logging
 
 ${color.bold('Principle')}
-  TCP connect time is diagnostic only. Ranking uses real WebSocket eligibility,
-  cold and warm page loading, and sequential video segment streaming.
+  TCP connect time is diagnostic only. Ranking uses real WebSocket eligibility with
+  Wilson confidence bounds, adaptive verification, portable web transfer and
+  sequential video segment streaming. Every result carries a confidence label.
 `;
 
 function parseArgs(argv) {
@@ -51,7 +57,7 @@ function parseArgs(argv) {
       continue;
     }
     const name = token.slice(2);
-    const numeric = ['max', 'rounds', 'tunnel-limit', 'tunnel-rounds', 'segments', 'concurrency'];
+    const numeric = ['max', 'rounds', 'tunnel-limit', 'tunnel-rounds', 'segments', 'concurrency', 'verify-limit'];
     if (numeric.includes(name) || name === 'xray-path' || name === 'log-level') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for --${name}`);
@@ -86,7 +92,15 @@ function applyOptions(settings, options) {
   if (tunnelRounds) next.tunnel.rounds = tunnelRounds;
   const segments = number('segments');
   if (segments) next.streaming.maxSegments = segments;
+  const verifyLimit = number('verify-limit');
+  if (verifyLimit) next.verification.limit = verifyLimit;
 
+  if (options.flags.has('no-verify')) next.verification.enabled = false;
+  if (options.flags.has('no-retry')) {
+    next.scan.delayedRetry.enabled = false;
+    next.hard.delayedRetry = false;
+  }
+  if (options.flags.has('abr')) next.streaming.variantMode = 'abr';
   if (options.flags.has('no-tunnel')) next.tunnel.enabled = false;
   if (options.flags.has('no-browsing')) next.browsing.enabled = false;
   if (options.flags.has('no-streaming')) next.streaming.enabled = false;
@@ -103,22 +117,27 @@ function printRanking(results, limit = 15) {
     .map((item) => [
       item.ip,
       item.scores.overall ?? '-',
+      item.scores.conservative ?? '-',
       item.scores.browsing ?? '-',
       item.scores.streaming ?? '-',
       `${Math.round((item.eligibility.successRate || 0) * 100)}%`,
+      item.scores.reliabilityLower95 ?? '-',
+      item.eligibility.confidence || '-',
+      item.eligibility.pops?.dominant || '-',
       item.streaming?.quality || '-',
     ]);
   if (rows.length === 0) {
     console.log(color.yellow('No candidates were measured.'));
     return;
   }
-  console.log(table(rows, ['IP', 'Overall', 'Browse', 'Stream', 'Success', 'Quality']));
+  console.log(table(rows, ['IP', 'Overall', 'Conserv', 'Transfer', 'Stream', 'Success', 'Lower95', 'Confidence', 'POP', 'Quality']));
+  console.log(color.dim('\nRanks are run-relative. Confidence reflects sample size, spread over time and the Wilson lower bound.'));
 }
 
-async function commandScan(options, { quick }) {
+async function commandScan(options, { profile }) {
   const layout = ensureDirectories();
   const stored = loadSettings(layout.settingsFile);
-  const base = quick ? quickProfile(stored) : stored;
+  const base = profile === 'quick' ? quickProfile(stored) : profile === 'research' ? researchProfile(stored) : stored;
   const settings = applyOptions(base, options);
 
   if (!fs.existsSync(layout.secretFile)) {
@@ -127,7 +146,7 @@ async function commandScan(options, { quick }) {
 
   const logger = createLogger({ level: settings.logging.level, directory: layout.logs });
   console.log(`${banner()}\n`);
-  console.log(`Run id: ${logger.runId}\n`);
+  console.log(`Run id: ${logger.runId}   profile: ${profile}\n`);
 
   try {
     const result = await runScan({
@@ -197,6 +216,7 @@ async function commandCheck() {
     ['Node.js', process.version, Number(process.versions.node.split('.')[0]) >= 20 ? 'ok' : 'upgrade to 20+'],
     ['Platform', `${process.platform}-${process.arch}`, 'ok'],
     ['Config', fs.existsSync(layout.secretFile) ? 'present' : 'missing', fileIsProtected(layout.secretFile) ? 'protected' : 'unprotected'],
+    ['Verification', settings.verification.enabled ? 'SPRT enabled' : 'disabled', `limit ${settings.verification.limit}`],
   ];
   if (located.found) {
     const version = await xrayVersion(located.path);
@@ -262,9 +282,11 @@ export async function main(argv = process.argv.slice(2)) {
         await runMenu();
         return 0;
       case 'scan':
-        return await commandScan(parseArgs(rest), { quick: false });
+        return await commandScan(parseArgs(rest), { profile: 'full' });
       case 'quick':
-        return await commandScan(parseArgs(rest), { quick: true });
+        return await commandScan(parseArgs(rest), { profile: 'quick' });
+      case 'research':
+        return await commandScan(parseArgs(rest), { profile: 'research' });
       case 'hard':
         return await commandHard(parseArgs(rest), { resume: false });
       case 'resume':

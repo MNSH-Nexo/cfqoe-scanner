@@ -150,8 +150,12 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
                 endpoints: effectiveSettings.load.endpoints,
                 durationMs: effectiveSettings.load.durationMs,
                 chunkBytes: effectiveSettings.load.chunkBytes,
+                flows: effectiveSettings.load.flows,
                 uploadBytes: effectiveSettings.load.uploadBytes,
+                uploadFlows: effectiveSettings.load.uploadFlows,
                 fanoutRequests: effectiveSettings.load.fanoutRequests,
+                control: Boolean(effectiveSettings.load.control?.enabled),
+                controlBytes: effectiveSettings.load.control?.bytes,
                 idleSamples: effectiveSettings.load.idleSamples,
                 timeoutMs: effectiveSettings.load.timeoutMs,
               });
@@ -159,9 +163,13 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
               logger.info('load.probe', {
                 ip: candidate.ip, round,
                 bytes: (loadResult.downlink?.totalBytes || 0) + (loadResult.uplink?.totalBytes || 0),
+                flows: loadResult.downlink?.flows ?? null,
                 sustainedMbps: loadResult.downlink?.sustainedMbps ?? null,
+                perFlowMbps: loadResult.downlink?.perFlowMbps ?? null,
                 shapingRatio: loadResult.downlink?.shapingRatio ?? null,
                 loadedRttMs: loadResult.latency?.loadedRttMs ?? null,
+                rttIncreaseMs: loadResult.latency?.rttIncreaseMs ?? null,
+                rpm: loadResult.latency?.rpm ?? null,
                 rttInflation: loadResult.latency?.rttInflation ?? null,
                 uplinkMbps: loadResult.uplink?.sustainedMbps ?? null,
               });
@@ -188,6 +196,7 @@ export async function runScan({ vlessUri, settings, layout, logger, onProgress =
         load: Boolean(effectiveSettings.load?.enabled),
       },
       gateOverrides: effectiveSettings.load?.gates,
+      gateProfile: effectiveSettings.load?.gateProfile,
       temporalBlocks: 1,
     });
     summary.selection = {

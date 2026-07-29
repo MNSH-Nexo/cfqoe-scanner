@@ -27,8 +27,8 @@ test('Android defaults reduce contention and checkpoint more often', () => {
   assert.ok(android.calibration.levels.at(-1) < desktop.calibration.levels.at(-1));
 });
 
-test('settings version 2 ships verification, calibration and retry defaults', () => {
-  assert.equal(DEFAULT_SETTINGS.version, 2);
+test('settings version 3 ships verification, calibration, retry and load defaults', () => {
+  assert.equal(DEFAULT_SETTINGS.version, 3);
   assert.equal(DEFAULT_SETTINGS.verification.enabled, true);
   assert.equal(DEFAULT_SETTINGS.verification.sprt.p0, 0.6);
   assert.equal(DEFAULT_SETTINGS.verification.sprt.p1, 0.9);
@@ -39,6 +39,10 @@ test('settings version 2 ships verification, calibration and retry defaults', ()
   assert.equal(DEFAULT_SETTINGS.streaming.researchSegments, 29);
   assert.equal(DEFAULT_SETTINGS.browsing.metricName, 'Web Transfer Score');
   assert.equal(DEFAULT_SETTINGS.browsing.maxSockets, 1);
+  assert.equal(DEFAULT_SETTINGS.load.enabled, true);
+  assert.ok(DEFAULT_SETTINGS.load.minBytes >= 6 * 1024 * 1024);
+  assert.ok(DEFAULT_SETTINGS.load.durationMs >= 15000);
+  assert.ok(DEFAULT_SETTINGS.load.uploadBytes >= 1024 * 1024);
 });
 
 test('loadSettings falls back to defaults for missing or broken files', () => {

@@ -24,6 +24,21 @@ test('Android defaults reduce contention and checkpoint more often', () => {
   assert.equal(desktop.hard.recheckTop, 20);
   assert.equal(android.hard.saveEvery, 10);
   assert.equal(desktop.hard.saveEvery, 25);
+  assert.ok(android.calibration.levels.at(-1) < desktop.calibration.levels.at(-1));
+});
+
+test('settings version 2 ships verification, calibration and retry defaults', () => {
+  assert.equal(DEFAULT_SETTINGS.version, 2);
+  assert.equal(DEFAULT_SETTINGS.verification.enabled, true);
+  assert.equal(DEFAULT_SETTINGS.verification.sprt.p0, 0.6);
+  assert.equal(DEFAULT_SETTINGS.verification.sprt.p1, 0.9);
+  assert.equal(DEFAULT_SETTINGS.scan.delayedRetry.enabled, true);
+  assert.equal(DEFAULT_SETTINGS.hard.delayedRetry, true);
+  assert.equal(DEFAULT_SETTINGS.calibration.enabled, true);
+  assert.equal(DEFAULT_SETTINGS.streaming.variantMode, 'fixed');
+  assert.equal(DEFAULT_SETTINGS.streaming.researchSegments, 29);
+  assert.equal(DEFAULT_SETTINGS.browsing.metricName, 'Web Transfer Score');
+  assert.equal(DEFAULT_SETTINGS.browsing.maxSockets, 1);
 });
 
 test('loadSettings falls back to defaults for missing or broken files', () => {
@@ -41,14 +56,16 @@ test('saveSettings then loadSettings round trips', () => {
   assert.equal(loadSettings(file).tunnel.limit, 11);
 });
 
-test('old settings files receive new Hard Scan defaults', () => {
+test('version 1 settings files receive the new measurement defaults', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cfqoe-set-'));
   const file = path.join(directory, 'settings.json');
-  fs.writeFileSync(file, JSON.stringify({ hard: { saveEvery: 7 } }));
+  fs.writeFileSync(file, JSON.stringify({ version: 1, hard: { saveEvery: 7 } }));
   const settings = loadSettings(file);
   assert.equal(settings.hard.saveEvery, 7);
   assert.equal(settings.hard.screeningRounds, 1);
   assert.equal(settings.hard.concurrency, DEFAULT_SETTINGS.hard.concurrency);
+  assert.equal(settings.verification.enabled, true);
+  assert.equal(settings.hard.delayedRetry, true);
 });
 
 test('resolveWorkloads combines built-in selection with custom entries', () => {

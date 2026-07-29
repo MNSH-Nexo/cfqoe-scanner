@@ -4,16 +4,16 @@ import readline from 'node:readline';
 import { parseVlessUri, describeVless, assertWebsocketCapable } from './config/vless.js';
 import { parseRangeList } from './candidate/ipv4.js';
 import { buildRangePlan, nextRoundRobinCandidate, nextLegacyCandidate } from './candidate/hard-order.js';
-import { collectCandidateBatch, runEligibilityBatch } from './hard-scheduler.js';
+import { collectCandidateBatch, runEligibilityBatch, runAdaptiveEligibilityBatch, selectDelayedRetries } from './hard-scheduler.js';
 import { probeWebsocket } from './probe/websocket.js';
 import { startXray } from './xray/manager.js';
 import { locateXray } from './platform/xray.js';
 import { loadCatalog, resolveWorkloads } from './config/settings.js';
 import { probeBrowsing } from './browsing/probe.js';
 import { probeStreaming } from './streaming/probe.js';
-import { applyTunnelResults, buildEligibilitySummary, rankCandidates, renderTopList, REPORT_SCHEMA } from './report.js';
+import { applyTunnelResults, buildEligibilitySummary, rankCandidates, renderTopList, REPORT_SCHEMA, GENERATOR_VERSION } from './report.js';
 
-const HARD_STATE_VERSION = 2;
+export const HARD_STATE_VERSION = 3;
 
 function positiveInteger(value, fallback = 1, maximum = 64) {
   const numeric = Math.floor(Number(value));
@@ -26,7 +26,12 @@ function successRate(observations) {
   return observations.filter((item) => item.ok).length / observations.length;
 }
 
+// Ranking uses the Wilson lower bound first: an IP observed once must not
+// outrank an IP that survived many independent observations.
 function compareEligibility(a, b) {
+  const lowerA = a.eligibility.confidence95?.lower ?? 0;
+  const lowerB = b.eligibility.confidence95?.lower ?? 0;
+  if (lowerB !== lowerA) return lowerB - lowerA;
   if (b.eligibility.successRate !== a.eligibility.successRate) {
     return b.eligibility.successRate - a.eligibility.successRate;
   }
@@ -51,21 +56,23 @@ function writeJson(filePath, value) {
 }
 
 function renderEligibilityList(summaries, limit = 30) {
-  const header = ['IP', 'Success', 'HandshakeP50', 'ConnectP50', 'Range'].join('\t');
+  const header = ['IP', 'Success', 'Lower95', 'Confidence', 'HandshakeP50', 'POP', 'Range'].join('\t');
   const lines = summaries.slice(0, limit).map((item) =>
     [
       item.ip,
       `${Math.round((item.eligibility.successRate || 0) * 100)}%`,
+      `${Math.round((item.eligibility.confidence95?.lower || 0) * 100)}%`,
+      item.eligibility.confidence,
       item.eligibility.handshakeMedianMs ?? '-',
-      item.eligibility.connectMedianMs ?? '-',
+      item.eligibility.pops?.dominant || '-',
       item.range,
     ].join('\t'),
   );
   return [header, ...lines].join('\n');
 }
 
-function appendEligibility(filePath, summary) {
-  fs.appendFileSync(filePath, `${JSON.stringify(summary)}\n`, { mode: 0o600 });
+function appendNdjson(filePath, value) {
+  fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 }
 
 function activeStateExists(layout) {
@@ -93,11 +100,21 @@ function isLegacyState(state) {
   return state.version < HARD_STATE_VERSION || Number.isInteger(state.cursor?.hostIndex);
 }
 
+// Checkpoints written by 0.5.x are still usable; the retry queue and the
+// verification counters are simply empty until the sweep continues.
+function migrateState(state) {
+  if (!state.files.retryFile) state.files.retryFile = state.files.eligibilityFile.replace(/\.eligibility\.ndjson$/, '.retry.ndjson');
+  if (!state.counts.retryQueued) state.counts.retryQueued = 0;
+  if (!state.counts.retryRecovered) state.counts.retryRecovered = 0;
+  return state;
+}
+
 function writeSnapshot(state) {
   const legacy = isLegacyState(state);
   const snapshot = {
     runId: state.runId,
     status: state.status,
+    scope: 'run-relative',
     traversal: legacy ? 'legacy-range-sequential' : 'range-round-robin',
     execution: 'parallel-batched',
     startedAt: state.startedAt,
@@ -106,6 +123,8 @@ function writeSnapshot(state) {
       tested: state.counts.tested,
       eligible: state.counts.eligible,
       failed: state.counts.failed,
+      retryQueued: state.counts.retryQueued,
+      retryRecovered: state.counts.retryRecovered,
       total: state.total,
       rangeIndex: state.cursor.rangeIndex,
       passIndex: legacy ? null : state.cursor.passIndex,
@@ -133,9 +152,10 @@ function createState({ layout, runId, settings, target, total, rangesCount }) {
     total,
     rangesCount,
     cursor: { rangeIndex: 0, passIndex: 0 },
-    counts: { tested: 0, eligible: 0, failed: 0 },
+    counts: { tested: 0, eligible: 0, failed: 0, retryQueued: 0, retryRecovered: 0 },
     files: {
       eligibilityFile: `${base}.eligibility.ndjson`,
+      retryFile: `${base}.retry.ndjson`,
       snapshotJson: `${base}.partial.json`,
       snapshotTxt: `${base}.partial.txt`,
       archiveStateFile: `${base}.state.json`,
@@ -198,7 +218,8 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
   const browsingWorkloads = settings.browsing.enabled ? resolveWorkloads({ settings, catalog, kind: 'browsing' }) : [];
   const streamingWorkloads = settings.streaming.enabled ? resolveWorkloads({ settings, catalog, kind: 'streaming' }) : [];
   const selected = candidates
-    .filter((item) => item.eligibility.successRate >= settings.scan.minimumSuccessRate)
+    .filter((item) => (item.eligibility.confidence95?.lower ?? item.eligibility.successRate) >= 0
+      && item.eligibility.successRate >= settings.scan.minimumSuccessRate)
     .slice(0, settings.tunnel.limit);
 
   const total = selected.length * settings.tunnel.rounds;
@@ -225,6 +246,7 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
             proxy: tunnel.socks,
             timeoutMs: settings.browsing.timeoutMs,
             assetLimit: settings.browsing.assetLimit,
+            maxSockets: settings.browsing.maxSockets,
             logger,
           }));
         }
@@ -236,6 +258,8 @@ async function runTunnelStage({ candidates, settings, layout, logger, vless, onP
             maxSegments: settings.streaming.maxSegments,
             startupBufferSec: settings.streaming.startupBufferSec,
             safetyFactor: settings.streaming.safetyFactor,
+            variantMode: settings.streaming.variantMode,
+            targetMbps: settings.streaming.targetMbps,
             logger,
           }));
         }
@@ -277,45 +301,128 @@ async function loadTopEligibility(filePath, limit) {
   return top;
 }
 
-async function recheckFinalists({ candidates, settings, vless, logger, onProgress }) {
+async function loadRetryQueue(filePath, limit) {
+  const queue = [];
+  if (!filePath || !fs.existsSync(filePath)) return queue;
+  const seen = new Set();
+  const lineReader = readline.createInterface({
+    input: fs.createReadStream(filePath, 'utf8'),
+    crlfDelay: Infinity,
+  });
+  for await (const line of lineReader) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed.ip || seen.has(parsed.ip)) continue;
+      seen.add(parsed.ip);
+      queue.push({ ip: parsed.ip, range: parsed.range });
+      if (queue.length >= limit) break;
+    } catch {
+      // ignore broken lines
+    }
+  }
+  return queue;
+}
+
+// Transient failures are re-measured after the sweep instead of being treated
+// as permanent disqualifications.
+async function drainRetryQueue({ state, settings, vless, logger, onProgress }) {
+  if (!settings.hard.delayedRetry) return [];
+  const queue = await loadRetryQueue(state.files.retryFile, positiveInteger(settings.hard.retryLimit, 1000, 100000));
+  if (queue.length === 0) return [];
+  const concurrency = positiveInteger(settings.hard.concurrency, settings.scan.concurrency);
+  logger.info('hard.retry.start', { candidates: queue.length, concurrency });
+  let recovered = 0;
+  const retried = await runEligibilityBatch({
+    candidates: queue,
+    rounds: positiveInteger(settings.scan.rounds, 2, 16),
+    concurrency,
+    minimumSuccessRate: settings.scan.minimumSuccessRate,
+    task: async (candidate) => probeWebsocket({ ip: candidate.ip, vless, timeoutMs: settings.scan.timeoutMs }),
+    onCandidateDone: ({ candidate, observations, finished, total }) => {
+      if (successRate(observations) >= settings.scan.minimumSuccessRate) recovered += 1;
+      onProgress({
+        phase: 'hard-retry',
+        completed: finished,
+        total,
+        eligible: recovered,
+        failed: finished - recovered,
+        currentRange: candidate.range,
+        note: 'delayed retry of transient failures',
+      });
+    },
+  });
+  state.counts.retryRecovered = recovered;
+  logger.info('hard.retry.complete', { candidates: retried.length, recovered });
+  return retried
+    .filter(({ observations }) => observations.some((item) => item.ok))
+    .map(({ candidate, observations }) => buildEligibilitySummary({
+      ip: candidate.ip,
+      range: candidate.range,
+      eligibility: observations,
+      temporalBlocks: 2,
+    }));
+}
+
+// Finalists are verified with SPRT: clear cases stop early, ambiguous ones get
+// the full sampling budget.
+async function verifyFinalists({ candidates, settings, vless, logger, onProgress }) {
   const limit = Math.min(candidates.length, positiveInteger(settings.hard.recheckTop, 20, 200));
   if (limit === 0) return candidates;
   const selected = candidates.slice(0, limit).map((item) => ({ ip: item.ip, range: item.range }));
   const concurrency = positiveInteger(settings.hard.concurrency, settings.scan.concurrency);
-  let verifiedEligible = 0;
-  let verifiedFailed = 0;
+  const useSprt = settings.verification?.enabled !== false;
+  let accepted = 0;
+  let rejected = 0;
 
-  logger.info('hard.recheck.start', { candidates: selected.length, rounds: settings.scan.rounds, concurrency });
-  const checked = await runEligibilityBatch({
-    candidates: selected,
-    rounds: settings.scan.rounds,
-    concurrency,
-    minimumSuccessRate: settings.scan.minimumSuccessRate,
-    task: async (candidate) => probeWebsocket({
-      ip: candidate.ip,
-      vless,
-      timeoutMs: settings.scan.timeoutMs,
-    }),
-    onCandidateDone: ({ candidate, observations, finished, total }) => {
-      if (successRate(observations) >= settings.scan.minimumSuccessRate) verifiedEligible += 1;
-      else verifiedFailed += 1;
-      onProgress({
-        phase: 'hard-recheck',
-        completed: finished,
-        total,
-        eligible: verifiedEligible,
-        failed: verifiedFailed,
-        currentRange: candidate.range,
-        note: 'verifying finalists',
-      });
-    },
+  logger.info('hard.verify.start', { candidates: selected.length, method: useSprt ? 'sprt' : 'fixed-rounds', concurrency });
+  const report = ({ candidate, finished, total, decision }) => onProgress({
+    phase: 'hard-verify',
+    completed: finished,
+    total,
+    eligible: accepted,
+    failed: rejected,
+    currentRange: candidate.range,
+    note: decision ? `verifying finalists (${decision})` : 'verifying finalists',
   });
 
-  const replacements = new Map(checked.map(({ candidate, observations }) => [
-    candidate.ip,
-    buildEligibilitySummary({ ip: candidate.ip, range: candidate.range, eligibility: observations }),
-  ]));
-  logger.info('hard.recheck.complete', { candidates: checked.length, eligible: verifiedEligible, failed: verifiedFailed });
+  const checked = useSprt
+    ? await runAdaptiveEligibilityBatch({
+        candidates: selected,
+        concurrency,
+        sprt: settings.verification?.sprt,
+        task: async (candidate) => probeWebsocket({ ip: candidate.ip, vless, timeoutMs: settings.scan.timeoutMs }),
+        onCandidateDone: (result) => {
+          if (result.decision === 'accept') accepted += 1;
+          else if (result.decision === 'reject') rejected += 1;
+          report(result);
+        },
+      })
+    : await runEligibilityBatch({
+        candidates: selected,
+        rounds: settings.scan.rounds,
+        concurrency,
+        minimumSuccessRate: settings.scan.minimumSuccessRate,
+        task: async (candidate) => probeWebsocket({ ip: candidate.ip, vless, timeoutMs: settings.scan.timeoutMs }),
+        onCandidateDone: (result) => {
+          if (successRate(result.observations) >= settings.scan.minimumSuccessRate) accepted += 1;
+          else rejected += 1;
+          report(result);
+        },
+      });
+
+  const replacements = new Map(checked.map(({ candidate, observations, decision }) => {
+    const summary = buildEligibilitySummary({
+      ip: candidate.ip,
+      range: candidate.range,
+      eligibility: observations,
+      temporalBlocks: 2,
+    });
+    summary.verification = { method: useSprt ? 'sprt' : 'fixed-rounds', decision: decision || 'measured', rounds: observations.length };
+    return [candidate.ip, summary];
+  }));
+  logger.info('hard.verify.complete', { candidates: checked.length, accepted, rejected });
   return candidates.map((item) => replacements.get(item.ip) || item).sort(compareEligibility);
 }
 
@@ -324,7 +431,9 @@ function writeHardReport({ layout, state, target, settings, candidates, xrayInfo
   const report = {
     schema: REPORT_SCHEMA,
     generator: 'cfqoe-scanner',
-    version: '0.5.0',
+    version: GENERATOR_VERSION,
+    scoreLabel: 'Experimental CFQoE Score',
+    scope: 'run-relative',
     mode: 'hard',
     traversal: isLegacyState(state) ? 'legacy-range-sequential' : 'range-round-robin',
     execution: 'parallel-batched',
@@ -341,7 +450,11 @@ function writeHardReport({ layout, state, target, settings, candidates, xrayInfo
       tested: state.counts.tested,
       eligible: state.counts.eligible,
       failed: state.counts.failed,
+      retryQueued: state.counts.retryQueued,
+      retryRecovered: state.counts.retryRecovered,
       includedInReport: ranked.length,
+      complete: ranked.filter((item) => item.measurement?.status === 'complete').length,
+      highConfidence: ranked.filter((item) => item.eligibility.confidence === 'high').length,
       withBrowsing: ranked.filter((item) => item.scores.browsing !== null).length,
       withStreaming: ranked.filter((item) => item.scores.streaming !== null).length,
     },
@@ -378,7 +491,7 @@ export async function runHardScan({
 
   let state;
   if (resume && activeStateExists(layout)) {
-    state = loadState(layout);
+    state = migrateState(loadState(layout));
     state.settings = settings;
     state.status = 'in_progress';
     state.execution = 'parallel-batched';
@@ -410,6 +523,7 @@ export async function runHardScan({
     execution: 'parallel-batched',
     concurrency,
     screeningRounds,
+    delayedRetry: Boolean(settings.hard.delayedRetry),
     resume,
   });
 
@@ -453,13 +567,20 @@ export async function runHardScan({
         },
       });
 
+      if (settings.hard.delayedRetry) {
+        for (const candidate of selectDelayedRetries(checked, { maxRetries: concurrency })) {
+          appendNdjson(state.files.retryFile, { ip: candidate.ip, range: candidate.range });
+          state.counts.retryQueued += 1;
+        }
+      }
+
       for (const { candidate, observations } of checked) {
         const summary = buildEligibilitySummary({
           ip: candidate.ip,
           range: candidate.range,
           eligibility: observations,
         });
-        appendEligibility(state.files.eligibilityFile, summary);
+        appendNdjson(state.files.eligibilityFile, summary);
         state.cursor = candidate.nextCursor;
         state.counts.tested += 1;
         if (summary.eligibility.successRate >= settings.scan.minimumSuccessRate) state.counts.eligible += 1;
@@ -485,8 +606,12 @@ export async function runHardScan({
   }
 
   const screenedTop = await loadTopEligibility(state.files.eligibilityFile, settings.hard.finalTop);
-  const topEligibility = await recheckFinalists({
-    candidates: screenedTop,
+  const recovered = cancelRequested ? [] : await drainRetryQueue({ state, settings, vless, logger, onProgress });
+  const merged = [...screenedTop.filter((item) => !recovered.some((entry) => entry.ip === item.ip)), ...recovered]
+    .sort(compareEligibility)
+    .slice(0, settings.hard.finalTop);
+  const topEligibility = await verifyFinalists({
+    candidates: merged,
     settings,
     vless,
     logger,
@@ -500,7 +625,8 @@ export async function runHardScan({
     vless,
     onProgress,
   });
-  const finalCandidates = topEligibility.map((item) => applyTunnelResults(item, tunnelResults.get(item.ip) || null));
+  const requirements = { browsing: settings.browsing.enabled, streaming: settings.streaming.enabled };
+  const finalCandidates = topEligibility.map((item) => applyTunnelResults(item, tunnelResults.get(item.ip) || null, requirements));
   const result = writeHardReport({
     layout,
     state,
@@ -519,6 +645,8 @@ export async function runHardScan({
     canceled: cancelRequested,
     tested: state.counts.tested,
     eligible: state.counts.eligible,
+    retryQueued: state.counts.retryQueued,
+    retryRecovered: state.counts.retryRecovered,
     traversal: state.traversal,
     execution: state.execution,
     report: result.jsonPath,

@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-case "$PWD" in
+physical_pwd="$(pwd -P)"
+case "$physical_pwd" in
   /sdcard/*|/storage/*)
     echo "CFQoE Scanner cannot reliably run Xray from shared Android storage."
     echo "Keep it under the Termux home directory: $HOME/cfqoe-scanner"
@@ -36,7 +37,7 @@ release_wake_lock() {
     termux-wake-unlock >/dev/null 2>&1 || true
   fi
 }
-trap release_wake_lock EXIT HUP TERM
+trap release_wake_lock EXIT
 
 if [ "$platform" = "android" ] && command -v termux-wake-lock >/dev/null 2>&1; then
   if termux-wake-lock >/dev/null 2>&1; then

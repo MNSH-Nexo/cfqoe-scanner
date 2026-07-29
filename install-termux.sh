@@ -7,10 +7,11 @@ if ! command -v pkg >/dev/null 2>&1; then
   exit 1
 fi
 
-case "$PWD" in
+physical_pwd="$(pwd -P)"
+case "$physical_pwd" in
   /sdcard/*|/storage/*)
     echo "Do not run CFQoE Scanner from shared Android storage."
-    echo "Move the project under the Termux home directory: $HOME"
+    echo "Clone or move the project under the Termux home directory: $HOME"
     exit 1
     ;;
 esac

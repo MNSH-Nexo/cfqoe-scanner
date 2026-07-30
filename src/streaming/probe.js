@@ -2,6 +2,10 @@ import { createHttpClient } from '../net/http.js';
 import { median, scoreLowerBetter, scoreHigherBetter, weightedScore, round } from '../stats.js';
 import { parseHlsManifest, simulateBuffer, estimateSustainableThroughput } from './metrics.js';
 
+const MIB = 1024 * 1024;
+const DEFAULT_STREAMING_MAX_BYTES = 12 * MIB;
+const READ_SLACK_BYTES = 64 * 1024;
+
 function chooseVariant(variants, { mode = 'fixed', targetMbps = 6 } = {}) {
   const ordered = variants.slice().sort((a, b) => (a.bandwidth || Infinity) - (b.bandwidth || Infinity));
   if (ordered.length === 0) return null;
@@ -10,11 +14,6 @@ function chooseVariant(variants, { mode = 'fixed', targetMbps = 6 } = {}) {
   return ordered.filter((item) => (item.averageBandwidth || item.bandwidth || Infinity) <= ceiling).at(-1) || ordered[0];
 }
 
-/**
- * Highest rendition the ladder actually offers, in Mbps.
- * A stream can never demonstrate more quality than its own top variant, so this
- * is the hard ceiling for any quality claim we make about a candidate.
- */
 function ladderCeilingMbps(variants = []) {
   const values = variants
     .map((item) => item.bandwidth || item.averageBandwidth)
@@ -26,20 +25,45 @@ function ladderCeilingMbps(variants = []) {
 function manifestCandidates(workload) {
   const list = [];
   if (workload.manifestUrl) list.push(workload.manifestUrl);
-  for (const url of workload.fallbackManifestUrls || []) {
-    if (url && !list.includes(url)) list.push(url);
-  }
+  for (const url of workload.fallbackManifestUrls || []) if (url && !list.includes(url)) list.push(url);
   return list;
 }
 
-async function fetchPrerequisite(client, descriptor, cache) {
+export function createStreamingBudget(limitBytes = DEFAULT_STREAMING_MAX_BYTES) {
+  const limit = Math.max(0, Math.floor(Number(limitBytes) || 0));
+  let actualBytes = 0;
+  return {
+    get limitBytes() { return limit; },
+    get actualBytes() { return actualBytes; },
+    get remainingBytes() { return Math.max(0, limit - actualBytes); },
+    account(bytes) { actualBytes += Math.max(0, Math.floor(Number(bytes) || 0)); },
+  };
+}
+
+async function budgetedRequest(client, budget, url, options = {}) {
+  if (budget.remainingBytes <= READ_SLACK_BYTES) {
+    return { url, ok: false, error: 'traffic_budget_exhausted', bytes: 0, totalMs: 0, ttfbMs: null };
+  }
+  const requestedLimit = Math.max(1, Math.floor(Number(options.maxBytes) || budget.remainingBytes));
+  const maxBytes = Math.max(1, Math.min(requestedLimit, budget.remainingBytes - READ_SLACK_BYTES));
+  const result = await client.request(url, { ...options, maxBytes });
+  budget.account(result.bytes);
+  return result;
+}
+
+function rangeHeaders(byteRange) {
+  return byteRange ? { Range: `bytes=${byteRange}` } : undefined;
+}
+
+async function fetchPrerequisite(client, descriptor, cache, budget) {
   if (!descriptor?.url) return { ok: true, totalMs: 0, bytes: 0 };
-  if (cache.has(descriptor.url)) return cache.get(descriptor.url);
-  const result = await client.request(descriptor.url, {
-    maxBytes: 4 * 1024 * 1024,
-    headers: descriptor.byteRange ? { Range: `bytes=${descriptor.byteRange}` } : undefined,
+  const cacheKey = `${descriptor.url}|${descriptor.byteRange || ''}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const result = await budgetedRequest(client, budget, descriptor.url, {
+    maxBytes: 4 * MIB,
+    headers: rangeHeaders(descriptor.byteRange),
   });
-  cache.set(descriptor.url, result);
+  cache.set(cacheKey, result);
   return result;
 }
 
@@ -48,6 +72,7 @@ export async function probeStreaming({
   proxy = null,
   timeoutMs = 25000,
   maxSegments = 4,
+  maxBytes = DEFAULT_STREAMING_MAX_BYTES,
   startupBufferSec = 4,
   safetyFactor = 1.25,
   variantMode = 'fixed',
@@ -55,6 +80,7 @@ export async function probeStreaming({
   logger = null,
 }) {
   const client = createHttpClient({ proxy, timeoutMs });
+  const budget = createStreamingBudget(maxBytes);
   let startupOverheadMs = 0;
   let selectedVariant = null;
   let ladderMaxMbps = typeof workload.ladderMaxMbps === 'number' ? workload.ladderMaxMbps : null;
@@ -66,14 +92,10 @@ export async function probeStreaming({
       segmentList = workload.segmentUrls.map((url) => ({ url, durationSec: workload.segmentDurationSec || 4 }));
     } else {
       const candidates = manifestCandidates(workload);
-      if (candidates.length === 0) return emptyResult(workload, 'manifest_missing', startupOverheadMs);
+      if (candidates.length === 0) return emptyResult(workload, 'manifest_missing', startupOverheadMs, budget);
       let lastError = 'manifest_failed';
-      // A dead reference URL must degrade to the next ladder, not to a fake
-      // "this IP cannot stream" verdict.
       for (const manifestUrl of candidates) {
-        const attempt = await loadSegments({
-          client, manifestUrl, variantMode, targetMbps,
-        });
+        const attempt = await loadSegments({ client, budget, manifestUrl, variantMode, targetMbps });
         startupOverheadMs += attempt.overheadMs;
         if (attempt.ok) {
           segmentList = attempt.segments;
@@ -84,31 +106,29 @@ export async function probeStreaming({
         }
         lastError = attempt.error;
         logger?.debug('streaming.manifest.fallback', { manifestUrl, error: attempt.error });
+        if (lastError === 'traffic_budget_exhausted') break;
       }
-      if (segmentList.length === 0) return emptyResult(workload, lastError, startupOverheadMs);
+      if (segmentList.length === 0) return emptyResult(workload, lastError, startupOverheadMs, budget);
     }
-    if (segmentList.length === 0) return emptyResult(workload, 'no_segments', startupOverheadMs);
+    if (segmentList.length === 0) return emptyResult(workload, 'no_segments', startupOverheadMs, budget);
 
     const measured = [];
     for (const segment of segmentList.slice(0, maxSegments)) {
-      const init = await fetchPrerequisite(client, segment.initMap, prerequisiteCache);
-      const key = await fetchPrerequisite(client, segment.key, prerequisiteCache);
-      if (!prerequisiteCache.has(`accounted:${segment.initMap?.url}`) && segment.initMap?.url) {
-        startupOverheadMs += init.totalMs || 0;
-        prerequisiteCache.set(`accounted:${segment.initMap.url}`, true);
-      }
-      if (!prerequisiteCache.has(`accounted:${segment.key?.url}`) && segment.key?.url) {
-        startupOverheadMs += key.totalMs || 0;
-        prerequisiteCache.set(`accounted:${segment.key.url}`, true);
-      }
+      if (budget.remainingBytes <= READ_SLACK_BYTES) break;
+      const init = await fetchPrerequisite(client, segment.initMap, prerequisiteCache, budget);
+      const key = await fetchPrerequisite(client, segment.key, prerequisiteCache, budget);
+      const initKey = segment.initMap?.url ? `accounted:${segment.initMap.url}|${segment.initMap.byteRange || ''}` : null;
+      const keyKey = segment.key?.url ? `accounted:${segment.key.url}` : null;
+      if (initKey && !prerequisiteCache.has(initKey)) { startupOverheadMs += init.totalMs || 0; prerequisiteCache.set(initKey, true); }
+      if (keyKey && !prerequisiteCache.has(keyKey)) { startupOverheadMs += key.totalMs || 0; prerequisiteCache.set(keyKey, true); }
       const prerequisitesOk = init.ok && key.ok;
       const result = prerequisitesOk
-        ? await client.request(segment.url, {
-            maxBytes: 16 * 1024 * 1024,
-            headers: segment.byteRange ? { Range: `bytes=${segment.byteRange}` } : undefined,
+        ? await budgetedRequest(client, budget, segment.url, {
+            maxBytes: 16 * MIB,
+            headers: rangeHeaders(segment.byteRange),
           })
         : { ok: false, totalMs: 0, bytes: 0, error: init.error || key.error || 'prerequisite_failed' };
-      logger?.debug('streaming.segment', { ok: result.ok, bytes: result.bytes, totalMs: result.totalMs, discontinuity: segment.discontinuity });
+      logger?.debug('streaming.segment', { ok: result.ok, bytes: result.bytes, totalMs: result.totalMs, range: segment.byteRange, discontinuity: segment.discontinuity });
       const ok = Boolean(result.ok && prerequisitesOk && result.bytes > 0);
       const seconds = Math.max(result.totalMs || 0, 1) / 1000;
       measured.push({
@@ -120,6 +140,7 @@ export async function probeStreaming({
         mbps: ok ? round((result.bytes * 8) / seconds / 1e6, 3) : null,
         error: ok ? null : result.error || 'segment_failed',
       });
+      if (result.error === 'traffic_budget_exhausted') break;
     }
 
     const successes = measured.filter((item) => item.ok);
@@ -133,11 +154,16 @@ export async function probeStreaming({
       { score: scoreLowerBetter(buffer.rebufferRatio, 0.005, 0.25), weight: 30 },
       { score: scoreHigherBetter(estimate.value ?? NaN, 6, 0.4), weight: 20 },
     ], { requireAll: true });
-    // A session that never reached the startup buffer has no playable quality to score.
     const score = buffer.playbackStarted ? rawScore : null;
     const quality = qualityLabel(estimate.value, ladderMaxMbps);
-    const ladderLimited =
-      typeof estimate.value === 'number' && typeof ladderMaxMbps === 'number' && estimate.value > ladderMaxMbps;
+    const ladderLimited = typeof estimate.value === 'number' && typeof ladderMaxMbps === 'number' && estimate.value > ladderMaxMbps;
+    const error = buffer.playbackStarted
+      ? null
+      : measured.length === 0 && budget.remainingBytes <= READ_SLACK_BYTES
+        ? 'traffic_budget_exhausted'
+        : successes.length === 0
+          ? measured.find((item) => item.error)?.error || 'all_segments_failed'
+          : 'playback_not_started';
 
     return {
       workload: workload.name,
@@ -151,8 +177,6 @@ export async function probeStreaming({
       estimator: estimate.estimator,
       estimatorConfidence: estimate.confidence,
       ladderMaxMbps,
-      // True when the path is faster than the reference ladder can prove. The
-      // honest reading is "at least this quality", never "exactly this quality".
       ladderLimited,
       quality,
       startupDelaySec: buffer.startupDelaySec,
@@ -163,9 +187,10 @@ export async function probeStreaming({
       rebufferRatio: buffer.rebufferRatio,
       variantMode,
       selectedVariant,
-      bytes: measured.reduce((total, item) => total + (item.bytes || 0), 0),
+      bytes: budget.actualBytes,
+      budget: { maxBytes: budget.limitBytes, remainingBytes: budget.remainingBytes, exhausted: budget.remainingBytes <= READ_SLACK_BYTES },
       score,
-      error: null,
+      error,
       detail: measured,
     };
   } finally {
@@ -173,9 +198,9 @@ export async function probeStreaming({
   }
 }
 
-async function loadSegments({ client, manifestUrl, variantMode, targetMbps }) {
+async function loadSegments({ client, budget, manifestUrl, variantMode, targetMbps }) {
   let overheadMs = 0;
-  const manifest = await client.request(manifestUrl, { captureBody: true, maxBytes: 1024 * 1024 });
+  const manifest = await budgetedRequest(client, budget, manifestUrl, { captureBody: true, maxBytes: MIB });
   overheadMs += manifest.totalMs || 0;
   if (!manifest.ok) return { ok: false, error: manifest.error || 'manifest_failed', overheadMs, segments: [] };
   let parsed = parseHlsManifest(manifest.body.toString('utf8'), manifestUrl);
@@ -185,28 +210,18 @@ async function loadSegments({ client, manifestUrl, variantMode, targetMbps }) {
     ladderMaxMbps = ladderCeilingMbps(parsed.variants);
     selectedVariant = chooseVariant(parsed.variants, { mode: variantMode, targetMbps });
     if (!selectedVariant) return { ok: false, error: 'variant_missing', overheadMs, segments: [] };
-    const media = await client.request(selectedVariant.url, { captureBody: true, maxBytes: 1024 * 1024 });
+    const media = await budgetedRequest(client, budget, selectedVariant.url, { captureBody: true, maxBytes: MIB });
     overheadMs += media.totalMs || 0;
     if (!media.ok) return { ok: false, error: media.error || 'variant_failed', overheadMs, segments: [] };
     parsed = parseHlsManifest(media.body.toString('utf8'), selectedVariant.url);
   }
-  if (!parsed.segments || parsed.segments.length === 0) {
-    return { ok: false, error: 'no_segments', overheadMs, segments: [] };
-  }
+  if (!parsed.segments || parsed.segments.length === 0) return { ok: false, error: 'no_segments', overheadMs, segments: [] };
   return { ok: true, error: null, overheadMs, segments: parsed.segments, selectedVariant, ladderMaxMbps };
 }
 
-/**
- * Quality label, capped by what the reference ladder can actually prove.
- * Reporting "4K" from a ladder whose top rendition is 6 Mbps was a pure
- * artefact of the measurement, not a property of the candidate.
- */
 function qualityLabel(mbps, ladderMaxMbps = null) {
   if (!Number.isFinite(mbps)) return null;
-  const effective =
-    typeof ladderMaxMbps === 'number' && Number.isFinite(ladderMaxMbps) && ladderMaxMbps > 0
-      ? Math.min(mbps, ladderMaxMbps)
-      : mbps;
+  const effective = typeof ladderMaxMbps === 'number' && Number.isFinite(ladderMaxMbps) && ladderMaxMbps > 0 ? Math.min(mbps, ladderMaxMbps) : mbps;
   if (effective >= 15) return '4K';
   if (effective >= 6) return '1080p';
   if (effective >= 3) return '720p';
@@ -214,15 +229,16 @@ function qualityLabel(mbps, ladderMaxMbps = null) {
   return '360p';
 }
 
-function emptyResult(workload, error, startupOverheadMs = 0) {
+function emptyResult(workload, error, startupOverheadMs = 0, budget = createStreamingBudget()) {
   return {
     workload: workload.name, manifestUrl: workload.manifestUrl || null, segments: 0, sampleCount: 0, successRate: 0,
-    medianMbps: null, p10Mbps: null, sustainableMbps: null, estimator: 'none',
-    estimatorConfidence: 'none', ladderMaxMbps: workload.ladderMaxMbps ?? null, ladderLimited: false,
-    quality: null, startupDelaySec: round(startupOverheadMs / 1000, 3),
-    startupOverheadMs: round(startupOverheadMs, 2), playbackStarted: false,
-    stalls: 0, stallSec: 0, rebufferRatio: null, bytes: 0, score: null, error, detail: [],
+    medianMbps: null, p10Mbps: null, sustainableMbps: null, estimator: 'none', estimatorConfidence: 'none',
+    ladderMaxMbps: workload.ladderMaxMbps ?? null, ladderLimited: false, quality: null,
+    startupDelaySec: round(startupOverheadMs / 1000, 3), startupOverheadMs: round(startupOverheadMs, 2),
+    playbackStarted: false, stalls: 0, stallSec: 0, rebufferRatio: null, bytes: budget.actualBytes,
+    budget: { maxBytes: budget.limitBytes, remainingBytes: budget.remainingBytes, exhausted: budget.remainingBytes <= READ_SLACK_BYTES },
+    score: null, error, detail: [],
   };
 }
 
-export { parseHlsManifest, simulateBuffer, chooseVariant, qualityLabel, ladderCeilingMbps };
+export { parseHlsManifest, simulateBuffer, chooseVariant, qualityLabel, ladderCeilingMbps, DEFAULT_STREAMING_MAX_BYTES };

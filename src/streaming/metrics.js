@@ -8,10 +8,24 @@ function parseAttributes(text) {
   return output;
 }
 
+function normalizeByteRange(spec, url, nextOffsetByUrl) {
+  const match = String(spec || '').trim().match(/^(\d+)(?:@(\d+))?$/);
+  if (!match) return null;
+  const length = Number(match[1]);
+  const explicitOffset = match[2] === undefined ? null : Number(match[2]);
+  if (!Number.isSafeInteger(length) || length <= 0) return null;
+  const start = explicitOffset ?? nextOffsetByUrl.get(url) ?? 0;
+  const end = start + length - 1;
+  if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(end)) return null;
+  nextOffsetByUrl.set(url, end + 1);
+  return `${start}-${end}`;
+}
+
 export function parseHlsManifest(text, baseUrl) {
   const lines = String(text).split(/\r?\n/);
   const variants = [];
   const segments = [];
+  const nextOffsetByUrl = new Map();
   let variant = null;
   let durationSec = null;
   let byteRange = null;
@@ -26,7 +40,10 @@ export function parseHlsManifest(text, baseUrl) {
     if (line.startsWith('#EXT-X-BYTERANGE:')) { byteRange = line.slice(line.indexOf(':') + 1); continue; }
     if (line.startsWith('#EXT-X-MAP:')) {
       const attrs = parseAttributes(line.slice(line.indexOf(':') + 1));
-      initMap = attrs.URI ? { url: new URL(attrs.URI, baseUrl).toString(), byteRange: attrs.BYTERANGE || null } : null;
+      if (attrs.URI) {
+        const url = new URL(attrs.URI, baseUrl).toString();
+        initMap = { url, byteRange: normalizeByteRange(attrs.BYTERANGE, url, nextOffsetByUrl) };
+      } else initMap = null;
       continue;
     }
     if (line.startsWith('#EXT-X-KEY:')) {
@@ -50,7 +67,14 @@ export function parseHlsManifest(text, baseUrl) {
       });
       variant = null;
     } else {
-      segments.push({ url, durationSec: Number.isFinite(durationSec) ? durationSec : 4, byteRange, initMap, key, discontinuity });
+      segments.push({
+        url,
+        durationSec: Number.isFinite(durationSec) ? durationSec : 4,
+        byteRange: normalizeByteRange(byteRange, url, nextOffsetByUrl),
+        initMap,
+        key,
+        discontinuity,
+      });
       durationSec = null;
       byteRange = null;
     }

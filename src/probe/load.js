@@ -1,6 +1,8 @@
 import { performance } from 'node:perf_hooks'
 import { createHttpClient } from '../net/http.js'
 
+const MIB = 1024 * 1024
+export const DEFAULT_MAX_DOWNLOAD_BYTES = 24 * MIB
 export const DEFAULT_LOAD_ENDPOINTS = {
 	download: 'https://speed.cloudflare.com/__down',
 	upload: 'https://speed.cloudflare.com/__up',
@@ -29,6 +31,22 @@ export function quantile(values, fraction) {
 	const high = Math.ceil(position)
 	if (low === high) return list[low]
 	return list[low] + (list[high] - list[low]) * (position - low)
+}
+
+export function createByteBudget(limitBytes) {
+	const limit = Math.max(0, Math.floor(Number(limitBytes) || 0))
+	let reserved = 0
+	return {
+		reserve(wantedBytes) {
+			const remaining = Math.max(0, limit - reserved)
+			const granted = Math.min(remaining, Math.max(0, Math.floor(Number(wantedBytes) || 0)))
+			reserved += granted
+			return granted
+		},
+		get limitBytes() { return limit },
+		get reservedBytes() { return reserved },
+		get remainingBytes() { return Math.max(0, limit - reserved) },
+	}
 }
 
 export function summarizeWindows(windows = []) {
@@ -135,13 +153,19 @@ async function measureIdleLatency({ client, url, samples }) {
 	return { values, failures }
 }
 
-export async function runLoadProbe({ proxy = null, endpoints = DEFAULT_LOAD_ENDPOINTS, durationMs = 20000, chunkBytes = 2 * 1024 * 1024, flows = 4, uploadBytes = 2 * 1024 * 1024, uploadFlows = 2, fanoutRequests = 8, idleSamples = 4, timeoutMs = 20000, control = false, controlBytes = 8 * 1024 * 1024 } = {}) {
+export async function runLoadProbe({
+	proxy = null, endpoints = DEFAULT_LOAD_ENDPOINTS, durationMs = 12000,
+	chunkBytes = 1 * MIB, maxDownloadBytes = DEFAULT_MAX_DOWNLOAD_BYTES,
+	flows = 4, uploadBytes = 2 * MIB, uploadFlows = 2, fanoutRequests = 6,
+	idleSamples = 4, timeoutMs = 20000, control = false, controlBytes = 6 * MIB,
+} = {}) {
 	const pingUrl = endpoints.ping || DEFAULT_LOAD_ENDPOINTS.ping
 	const downTemplate = endpoints.download || DEFAULT_LOAD_ENDPOINTS.download
 	const uploadUrl = endpoints.upload || DEFAULT_LOAD_ENDPOINTS.upload
 	const controlUrl = endpoints.control || DEFAULT_LOAD_ENDPOINTS.control
 	const flowCount = Math.max(1, Math.floor(flows))
 	const uploadFlowCount = Math.max(1, Math.floor(uploadFlows))
+	const downloadBudget = createByteBudget(maxDownloadBytes)
 	const pingClient = createHttpClient({ proxy, timeoutMs, maxSockets: 1 })
 	const bulkClients = Array.from({ length: flowCount }, () => createHttpClient({ proxy, timeoutMs, maxSockets: 1 }))
 	const uploadClients = Array.from({ length: uploadFlowCount }, () => createHttpClient({ proxy, timeoutMs, maxSockets: 1 }))
@@ -167,20 +191,22 @@ export async function runLoadProbe({ proxy = null, endpoints = DEFAULT_LOAD_ENDP
 		await Promise.all(bulkClients.map(async (client, flowIndex) => {
 			let consecutiveFailures = 0
 			while (performance.now() < deadline && consecutiveFailures < 2) {
-				const result = await client.request(downloadUrl(downTemplate, chunkBytes), { maxBytes: chunkBytes * 2 })
+				const requestBytes = downloadBudget.reserve(chunkBytes)
+				if (requestBytes <= 0) break
+				const result = await client.request(downloadUrl(downTemplate, requestBytes), { maxBytes: requestBytes })
 				const payloadMs = typeof result.ttfbMs === 'number' && typeof result.totalMs === 'number' ? Math.max(result.totalMs - result.ttfbMs, 1) : result.totalMs
 				const ok = Boolean(result.ok) && result.bytes > 0
 				consecutiveFailures = ok ? 0 : consecutiveFailures + 1
-				windows.push({ flow: flowIndex, bytes: result.bytes, ms: payloadMs, ok, offsetMs: round(performance.now() - saturationStart) })
+				windows.push({ flow: flowIndex, bytes: result.bytes, requestedBytes: requestBytes, ms: payloadMs, ok, offsetMs: round(performance.now() - saturationStart) })
 			}
 		}))
 		const saturationWall = performance.now() - saturationStart
 		probing = false
 		await latencyLoop
 		const fanoutStarted = performance.now()
-		const fanoutResults = await Promise.all(Array.from({ length: fanoutRequests }, () => fanoutClient.request(downloadUrl(downTemplate, 128 * 1024), { maxBytes: 512 * 1024, keepAlive: false })))
+		const fanoutResults = await Promise.all(Array.from({ length: fanoutRequests }, () => fanoutClient.request(downloadUrl(downTemplate, 128 * 1024), { maxBytes: 128 * 1024, keepAlive: false })))
 		const fanoutWall = performance.now() - fanoutStarted
-		const perFlowBudget = Math.max(256 * 1024, Math.ceil(uploadBytes / uploadFlowCount))
+		const perFlowBudget = Math.max(1, Math.ceil(uploadBytes / uploadFlowCount))
 		const uploadChunk = Math.min(perFlowBudget, 512 * 1024)
 		const uploadWindows = []
 		const uploadStart = performance.now()
@@ -189,7 +215,7 @@ export async function runLoadProbe({ proxy = null, endpoints = DEFAULT_LOAD_ENDP
 			while (uploaded < perFlowBudget) {
 				const bytesThisRequest = Math.min(uploadChunk, perFlowBudget - uploaded)
 				const payload = Buffer.alloc(bytesThisRequest, 0x61)
-				const result = await client.request(uploadUrl, { method: 'POST', body: payload, maxBytes: 256 * 1024 })
+				const result = await client.request(uploadUrl, { method: 'POST', body: payload, maxBytes: 128 * 1024 })
 				uploadWindows.push({ flow: flowIndex, bytes: result.ok ? bytesThisRequest : 0, ms: result.totalMs, ok: Boolean(result.ok), offsetMs: round(performance.now() - uploadStart) })
 				uploaded += bytesThisRequest
 				if (!result.ok) break
@@ -212,7 +238,11 @@ export async function runLoadProbe({ proxy = null, endpoints = DEFAULT_LOAD_ENDP
 		return {
 			ok: downlink.samples > 0, downlink, latency, fanout, uplink, control: controlSummary,
 			gateMetrics: toGateMetrics({ downlink, latency, fanout, uplink }),
-			budget: { durationMs, chunkBytes, flows: flowCount, uploadBytes, uploadFlows: uploadFlowCount, fanoutRequests },
+			budget: {
+				durationMs, chunkBytes, flows: flowCount,
+				maxDownloadBytes: downloadBudget.limitBytes, reservedDownloadBytes: downloadBudget.reservedBytes,
+				uploadBytes, uploadFlows: uploadFlowCount, fanoutRequests,
+			},
 		}
 	} finally {
 		pingClient.close(); fanoutClient.close()

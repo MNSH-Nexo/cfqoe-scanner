@@ -1,0 +1,4 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { calibrateWebsocketConcurrency } from '../src/measurement/scan-calibration.js';
+const candidates=[{ip:'1.1.1.1'},{ip:'1.0.0.1'}];
+test('websocket calibration keeps the requested limit when disabled',async()=>{const r=await calibrateWebsocketConcurrency({candidates,calibration:{enabled:false},requestedConcurrency:7});assert.equal(r.selectedConcurrency,7);assert.equal(r.reason,'disabled');});
+test('websocket calibration uses a working control and backs off',async()=>{let calls=0;const r=await calibrateWebsocketConcurrency({candidates,calibration:{enabled:true,levels:[1,2,4],latencyInflationLimit:.1,failureRateIncreaseLimit:.02,eventLoopLagLimitMs:1000},requestedConcurrency:4,probeTask:async()=>{calls+=1;return{ok:true,handshakeMs:calls>=5?150:100}}});assert.equal(r.reason,'measured');assert.ok(r.selectedConcurrency>=1&&r.selectedConcurrency<=4);assert.equal(r.controlIp,'1.1.1.1');});

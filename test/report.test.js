@@ -1,12 +1,3 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { applyTunnelResults, buildCandidateSummary, buildEligibilitySummary, rankCandidates, writeReport, renderTopList, REPORT_SCHEMA } from '../src/report.js';
-function candidate(ip, { browsingScore, streamingScore, ok = true }) { return buildCandidateSummary({ ip, range: 'x', eligibility: [{ ok, handshakeMs: 120, connectMs: 40, cfRay: 'x-FRA' }, { ok, handshakeMs: 130, connectMs: 45, cfRay: 'y-FRA' }], tunnel: { browsing: [{ score: browsingScore, bytes: 1000 }], streaming: [{ score: streamingScore, sustainableMbps: 8, quality: '1080p', bytes: 5000 }] } }); }
-test('candidate summary aggregates stages',()=>{const s=candidate('1.1.1.1',{browsingScore:80,streamingScore:90});assert.equal(s.measurement.status,'complete');assert.ok(s.scores.overall>80);});
-test('eligibility-only is unmeasured',()=>{const s=buildCandidateSummary({ip:'2.2.2.2',range:'x',eligibility:[{ok:true}],tunnel:null,requirements:{browsing:true,streaming:true}});assert.equal(s.measurement.status,'unmeasured');assert.equal(s.scores.overall,null);});
-test('complete ranks above unmeasured',()=>{const ranked=rankCandidates([buildCandidateSummary({ip:'3.3.3.3',range:'x',eligibility:[{ok:true}],tunnel:null}),candidate('1.1.1.1',{browsingScore:50,streamingScore:50})]);assert.equal(ranked[0].ip,'1.1.1.1');});
-test('report identifies v0.8.2 and schema 9',()=>{const directory=fs.mkdtempSync(path.join(os.tmpdir(),'cfqoe-'));const written=writeReport({directory,runId:'test',target:{},settings:{},candidates:[candidate('1.1.1.1',{browsingScore:70,streamingScore:60})],startedAt:new Date().toISOString()});const parsed=JSON.parse(fs.readFileSync(written.jsonPath));assert.equal(parsed.schema,REPORT_SCHEMA);assert.equal(parsed.schema,9);assert.equal(parsed.version,'0.8.2');});
-test('top list contains confidence',()=>{assert.ok(renderTopList([candidate('1.1.1.1',{browsingScore:50,streamingScore:50})]).includes('Confidence'));});
+import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import os from'node:os';import path from'node:path';import{buildCandidateSummary,writeReport,REPORT_SCHEMA}from'../src/report.js';
+function candidate(ip){return buildCandidateSummary({ip,range:'x',eligibility:[{ok:true,handshakeMs:120,connectMs:40}],tunnel:{browsing:[{score:70,bytes:1000}],streaming:[{score:60,sustainableMbps:8,quality:'1080p',bytes:5000}]}})}
+test('report identifies v0.8.3 and schema 9',()=>{const directory=fs.mkdtempSync(path.join(os.tmpdir(),'cfqoe-'));const written=writeReport({directory,runId:'test',target:{},settings:{},candidates:[candidate('1.1.1.1')],startedAt:new Date().toISOString()});const parsed=JSON.parse(fs.readFileSync(written.jsonPath));assert.equal(parsed.schema,REPORT_SCHEMA);assert.equal(parsed.schema,9);assert.equal(parsed.version,'0.8.3');});

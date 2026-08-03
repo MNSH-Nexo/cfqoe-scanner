@@ -32,7 +32,7 @@ Origin هیچ credential، upload یا endpoint اجرایی ندارد. فقط 
 
 ## Supply chain
 
-CFQoE dependency زمان اجرا ندارد. نصب‌کننده فایل خارجی یا باینری `latest` دانلود نمی‌کند و فقط محتوای بستهٔ موجود را نصب می‌کند.
+CFQoE dependency زمان اجرا ندارد. نصب‌کننده Xray فقط asset رسمی آخرین release را از GitHub می‌گیرد و قبل از استخراج و اجرا، وجود و تطبیق digest از نوع SHA-256 را اجباری می‌کند؛ در نبود digest نصب متوقف می‌شود.
 
 ## Sharing diagnostics
 

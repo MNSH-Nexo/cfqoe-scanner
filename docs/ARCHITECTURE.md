@@ -30,7 +30,7 @@ JSON + CSV + Top IPs + NDJSON diagnostics
 - `origin`: workload کنترل‌شدهٔ page و streaming
 - `logging`: logger ساختاریافته، redaction و diagnostics
 - `stats`: median، p90، p10 و MAD
-- `report`: schema v3، CSV و top IPs
+- `report`: schema v9، JSON و top IPs
 - `config`: استخراج metadata بدون انتشار credential
 - `ui`: خروجی ترمینال
 

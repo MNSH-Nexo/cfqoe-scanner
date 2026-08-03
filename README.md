@@ -14,14 +14,14 @@ CFQoE Scanner روی **Windows، Linux و Android/Termux** اجرا می‌شو�
 - پشتیبانی از VLESS + WebSocket
 - دانلود خودکار نسخه رسمی و مناسب Xray
 - بازه اطمینان Wilson و امتیاز محافظه‌کارانه برای هر IP
-- تأیید تطبیقی نتایج با آزمون SPRT (نمونه‌گیری فقط تا رسیدن به تصمیم قطعی)
-- کالیبراسیون concurrency قبل از اسکن برای اندازه‌نگرفتن ازدحام خودمان
-- مرحله Real Load: عبور چند ده مگابایت ترافیک و سنجش shaping، latency زیر بار، fan-out و آپ‌لینک
+- تأیید تطبیقی نتایج با آزمون SPRT
+- کالیبراسیون concurrency قبل از اسکن
+- مرحله Real Load برای سنجش shaping، latency زیر بار، fan-out و آپ‌لینک
 - سقف‌گزاری امتیاز با گیت‌های مطلق و برچسب نهایی `verdict`
 - تفکیک خطای سخت و نرم + صف retry تأخیری
-- ثبت POP کلودفلر (`cf-ray`) و بررسی یکنواختی آن
-- استریم با ABR واقعی یا نردبان بیت‌ریت ثابت
-- گزارش JSON (schema 7)، رتبه‌بندی متنی و لاگ ساخت‌یافته
+- ثبت POP کلودفلر (`cf-ray`)
+- استریم با rendition ثابت هدف یا حالت محافظه‌کارانه `lowest` (بدون ادعای ABR کامل)
+- گزارش JSON (schema 9)، رتبه‌بندی متنی و لاگ ساخت‌یافته
 - محافظت محلی از URI و حذف اطلاعات حساس از گزارش‌ها
 
 ---
@@ -37,7 +37,7 @@ git clone https://github.com/MNSH-Nexo/cfqoe-scanner.git
 cd cfqoe-scanner
 ```
 
-سپس `Start-CFQoE.cmd` را اجرا کنید. Xray در اجرای اول خودکار دانلود می‌شود.
+سپس `Start-CFQoE.cmd` را اجرا کنید.
 
 ## Linux
 
@@ -48,7 +48,7 @@ chmod +x start-cfqoe.sh
 ./start-cfqoe.sh
 ```
 
-## Android با Termux — نصب با یک دستور
+## Android با Termux
 
 > پروژه را داخل Home ترموکس نگه دارید، نه Download یا `/sdcard`.
 
@@ -79,22 +79,22 @@ cd ~/cfqoe-scanner
 ## منوی اصلی
 
 ```text
-1. Quick Scan            fast screening, low confidence labels
-2. Full Scan             wider sample with independent verification
-3. Research Scan         slow, high-confidence measurement profile
-4. Hard Deep Scan        parallel one-IP-per-range sweep, resumable
-5. Resume Hard Scan      continue the last deep sweep
-6. VLESS Configuration   import, inspect or remove your config
-7. Workload Settings     choose or add transfer and streaming targets
-8. System Check          verify Node, Xray and file protection
-9. Best IPs              show the latest ranking with confidence
-10. Previous Results     list saved reports
-11. Diagnostics          summarize the newest log file
-12. Scan Settings        edit measurement and verification numbers
+1. Quick Scan
+2. Full Scan
+3. Research Scan
+4. Hard Deep Scan
+5. Resume Hard Scan
+6. VLESS Configuration
+7. Workload Settings
+8. System Check
+9. Best IPs
+10. Previous Results
+11. Diagnostics
+12. Scan Settings
 0. Exit
 ```
 
-خروجی هر گزینه زیر همان منو نمایش داده می‌شود و تا زمانی که Enter نزده‌اید پاک نخواهد شد.
+در نسخه 0.8.3 ورود کانفیگ در مسیر گزینه 6 → 1، artefactهای clipboard ترموکس شامل bidi/zero-width، bracketed paste و wrapperهای نقل‌قول را پاک می‌کند. ورودی نامعتبر در همان مسیر دوباره درخواست می‌شود و فایل پس از ذخیره مجدداً خوانده و اعتبارسنجی می‌شود.
 
 ---
 
@@ -102,23 +102,17 @@ cd ~/cfqoe-scanner
 
 | حالت | تعداد IP | roundها | نمونه استریم | تأیید |
 | --- | --- | --- | --- | --- |
-| Quick | ۱۶ | ۲ | ۶ | کوتاه‌شده |
-| Full | ۱۲۰ | ۳ | ۲۴ | SPRT روی ۲۰ finalist |
-| Research | ۲۴۰+ | ۶+ | ۲۹ | SPRT روی ۲۴ finalist تا ۲۴ round |
-| Hard | تمام catalog | screening + تأیید | ۲۴ | SPRT + retry تأخیری |
+| Quick | ۱۶ | ۲ | ۲ | کوتاه‌شده |
+| Full | ۱۲۰ | ۳ | ۴ | SPRT روی ۲۰ finalist |
+| Research | ۲۴۰+ | ۶+ | ۶ | SPRT روی ۲۴ finalist تا ۲۴ round |
+| Hard | تمام catalog | screening + تأیید | ۴ پیش‌فرض | SPRT + retry تأخیری |
 
-- **Quick** فقط screening است؛ برچسب اعتماد نتایج آن پایین می‌ماند و نباید مبنای تصمیم نهایی باشد.
+- **Quick** فقط screening است.
 - **Full** حالت پیش‌فرض روزمره است.
-- **Research** برای وقتی است که عدد باید قابل دفاع باشد؛ کند است و P10 واقعی گزارش می‌کند.
-- **Hard** کل catalog را breadth-first و range round-robin پیمایش می‌کند، checkpoint می‌سازد و با `Q` یا `Ctrl+C` امن متوقف می‌شود.
+- **Research** برای اندازه‌گیری دقیق‌تر و طولانی‌تر است.
+- **Hard** کل catalog را range round-robin پیمایش می‌کند، checkpoint می‌سازد و با `Q` یا `Ctrl+C` امن متوقف می‌شود.
 
-Hard Scan همچنین:
-
-- network و broadcast را در subnetهای معمولی کنار می‌گذارد.
-- بعد از هر N IP checkpoint می‌سازد.
-- خطاهای گذرا را در صف retry تأخیری نگه می‌دارد و بعداً دوباره امتحان می‌کند.
-- finalistها را با SPRT تأیید می‌کند.
-- با `Resume Hard Scan` از cursor ذخیره‌شده ادامه می‌دهد. checkpointهای نسخه قبل خودکار migrate می‌شوند.
+Hard Scan همچنین خطاهای گذرا را در صف retry نگه می‌دارد، finalistها را با SPRT تأیید می‌کند و از checkpoint قبلی ادامه می‌دهد.
 
 ---
 
@@ -126,150 +120,64 @@ Hard Scan همچنین:
 
 شرح کامل در [docs/MEASUREMENT-ENGINE.md](docs/MEASUREMENT-ENGINE.md) و [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
 
-## 1. Eligibility
+## Eligibility
 
-برای هر IP یک WebSocket Upgrade واقعی با host، path و port کانفیگ کاربر انجام می‌شود. پاسخ HTTP 101، موفقیت roundها، زمان handshake و POP کلودفلر ثبت می‌شوند. TCP connect فقط برای diagnostics است.
+برای هر IP یک WebSocket Upgrade واقعی با host، path و port کانفیگ کاربر انجام می‌شود. علاوه بر HTTP 101، هدرهای `Connection: Upgrade` و `Sec-WebSocket-Accept` اعتبارسنجی می‌شوند. TCP connect فقط برای diagnostics است.
 
-موفقیت هر IP به‌صورت بازه اطمینان Wilson گزارش می‌شود:
+## تأیید تطبیقی
 
-| مشاهده | برآورد نقطه‌ای | کران پایین Wilson |
-| --- | --- | --- |
-| 1/1 | ۱۰۰٪ | ≈ ۲۰.۷٪ |
-| 3/3 | ۱۰۰٪ | ≈ ۴۳.۹٪ |
-| 16/16 | ۱۰۰٪ | ≈ ۸۰.۶٪ |
+`p0 = 0.60`، `p1 = 0.90`، `alpha = 0.05`، `beta = 0.10`. تصمیم `accept`، `reject` یا `inconclusive` در گزارش ذخیره می‌شود.
 
-رتبه‌بندی با `conservative` انجام می‌شود، یعنی با کران پایین؛ پس IP کم‌نمونه به‌صرف خوش‌شانسی بالا نمی‌آید.
+## Web Transfer Score
 
-## 2. تأیید تطبیقی (SPRT)
+این معیار کیفیت انتقال HTTP قابل حمل است، نه QoE مرورگر. DOM، اجرای جاوااسکریپت و رندر وجود ندارد و یک socket برای هر host استفاده می‌شود.
 
-`p0 = 0.60`، `p1 = 0.90`، `alpha = 0.05`، `beta = 0.10`. IP واضحاً خوب یا واضحاً بد در چند round تعیین می‌شود و بودجه نمونه‌گیری صرف موارد مبهم می‌شود. تصمیم (`accept` / `reject` / `inconclusive`) در گزارش ذخیره می‌شود.
+در نسخه 0.8.3 سقف انتقال هر مشاهده واقعاً در runtime اعمال می‌شود: دسکتاپ ۱۰ asset و ۵ MiB؛ اندروید ۸ asset و ۳ MiB.
 
-## 3. Tunnel
+## Streaming
 
-برای هر finalist، Xray با همان IP بالا می‌آید، SOCKS محلی ساخته می‌شود، workloadها اجرا می‌شوند و سپس Xray متوقف و فایل موقت حذف می‌شود.
+manifest واقعی HLS خوانده می‌شود و `EXT-X-MAP`، `EXT-X-KEY`، byte range و discontinuity پشتیبانی می‌شوند.
 
-## 4. Web Transfer Score (قبلاً Browsing)
-
-این معیار **کیفیت انتقال HTTP قابل حمل** است، نه QoE مرورگر: DOM، اجرای جاوااسکریپت، رندر و connection pool مرورگر واقعی وجود ندارد و به‌عمد یک socket برای هر host استفاده می‌شود.
-
-- موفقیت منابع: ۴۰٪
-- cold load: ۱۵٪
-- warm load: ۲۰٪
-- TTFB p90: ۱۵٪
-- پایداری (MAD): ۱۰٪
-
-در نسخه 0.7.0 تعداد asset هر مشاهده از ۶ به ۱۴ (اندروید ۱۰) رسید تا حجم انتقال واقعی‌تر باشد.
-
-## 5. Streaming
-
-manifest واقعی HLS خوانده می‌شود؛ `EXT-X-MAP`، `EXT-X-KEY`، byte range و discontinuity پشتیبانی می‌شوند و زمان آن‌ها در startup delay حساب می‌شود.
-
-- موفقیت segment: ۳۵٪
-- startup delay: ۱۵٪
-- rebuffer ratio: ۳۰٪
-- بیت‌ریت پایدار: ۲۰٪
-
-نکات:
-
-- تعداد segment پیش‌فرض از ۱۰ به ۲۴ (اندروید ۱۴) افزایش یافت؛ یعنی چندین ده مگابایت ویدیو واقعی.
+- نسخه 0.8.3 به‌صورت پیش‌فرض ۴ segment روی دسکتاپ و ۳ segment روی Android می‌سنجد.
+- سقف بایت Streaming دسکتاپ ۱۲ MiB و اندروید ۸ MiB است.
 - فقط segmentهای موفق به بافر قابل پخش اضافه می‌شوند.
-- برآورد بیت‌ریت با **میانگین همساز** انجام می‌شود؛ P10 فقط با حداقل ۲۹ نمونه گزارش می‌شود و نام تخمین‌گر همراه عدد ذخیره می‌شود.
-- اگر پخش هرگز به بافر شروع نرسد، امتیازی داده نمی‌شود.
-- `variantMode = abr` رفتار واقعی ABR را شبیه‌سازی می‌کند؛ `fixed` نردبان بیت‌ریت هدف را انتخاب می‌کند.
+- P10 فقط با حداقل ۲۹ نمونه گزارش می‌شود.
+- `fixed` rendition نزدیک bitrate هدف و `lowest` پایین‌ترین rendition را انتخاب می‌کند.
 
-## 6. Real Load (نسخه ۰.۷)
+## Real Load
 
-مرحله جدیدی که واقعاً حجم عبور می‌دهد و رفتار لینک را زیر بار می‌سنجد:
+مرحله Real Load دانلود و آپلود واقعی، latency زیر بار، fan-out، shaping و RPM را اندازه می‌گیرد. سقف دانلود دسکتاپ ۲۴ MiB و Android ۱۲ MiB است.
 
-1. **latency بی‌بار**: چند نمونه RTT پیش از شروع بار.
-2. **دانلود پیوسته**: چانک‌های ۱ تا ۲ مگابایتی تا پایان بودجه زمانی (پیش‌فرض ۱۵ تا ۲۵ ثانیه)، همراه با پینگ همزمان هر ۲۵۰ میلی‌ثانیه.
-3. **fan-out مرورگری**: ۶ تا ۸ درخواست موازی روی اتصال تازه (بدون keep-alive) برای سنجش هزینه اتصال جدید.
-4. **آپلود**: POST چند مگابایتی برای سنجش آپ‌لینک.
-
-متریک‌های خروجی: `sustainedMbps`، `peakMbps`، `earlyMbps`/`lateMbps`، `shapingRatio`، `idleRttMs`، `loadedRttMs`، `rttInflation`، `jitterMs`، `lossRate`، `fanoutSuccess`، `freshConnectionMs`، `uplinkMbps`.
-
-`shapingRatio = lateMbps / earlyMbps` است: اگر لینک بعد از چند مگابایت خفه شود این عدد سقوط می‌کند. این دقیقاً همان چیزی است که در نسخه‌های قبلی دیده نمی‌شد، چون کل حجم اندازه‌گیری چند صد کیلوبایت بود.
-
-## گیت‌های مطلق (Absolute Gates)
-
-گیت‌ها فقط می‌توانند امتیاز را **پایین** بیاورند:
-
-| گیت | warn | fail |
-| --- | --- | --- |
-| `sustainedMbps` | < ۶ | < ۱.۵ |
-| `shapingRatio` | < ۰.۷ | < ۰.۴ |
-| `loadedRttMs` | > ۲۵۰ | > ۶۰۰ |
-| `rttInflation` | > ۱.۶ | > ۳ |
-| `jitterMs` | > ۶۰ | > ۱۵۰ |
-| `lossRate` | > ۲٪ | > ۸٪ |
-| `fanoutSuccess` | < ۹۸٪ | < ۹۰٪ |
-| `freshConnectionMs` | > ۸۰۰ | > ۲۰۰۰ |
-| `uplinkMbps` | < ۱ | < ۰.۲۵ |
-
-سقف امتیاز: `pass` → ۱۰۰، `warn` → ۷۵، `fail` → ۴۵، داده ناقص → ۷۵.
-
-برچسب نهایی (`verdict`): `recommended`، `good`، `usable`، `browsing-only`، `unverified`، `unusable`. رتبه‌بندی اول بر اساس verdict و سپس امتیاز محافظه‌کارانه است، پس یک IP با ۹۱ ظاهری که گیت را رد کرده هرگز بالای لیست نمی‌ایستد.
-
-## حجم ترافیک هر کاندید
-
-با پیش‌فرض‌های ۰.۷.۰ هر finalist در هر round چند ده مگابایت ترافیک مصرف می‌کند (دسکتاپ > ۳۰ مگابایت، اندروید > ۱۲ مگابایت). `estimateTrafficBytes()` برآورد برنامه‌ریزی‌شده و `measurement.bytesMeasured` حجم واقعی اندازه‌گیری‌شده را گزارش می‌دهند.
-
-روی اینترنت محدود از `--no-load`، `--load-duration`، `--load-chunk-mb` یا فیلدهای `load` در Scan Settings استفاده کنید.
+متریک‌های خروجی شامل `sustainedMbps`، `shapingRatio`، `idleRttMs`، `loadedRttMs`، `rpm`، `jitterMs`، `lossRate`، `fanoutSuccess` و `uplinkMbps` هستند.
 
 ## Overall Score
 
-با فعال بودن مرحله Real Load:
+با فعال بودن Real Load:
 
 - Web Transfer: ۳۰٪
 - Streaming: ۳۰٪
 - Real Load: ۲۵٪
 - Reliability: ۱۵٪
 
-(اگر مرحله Real Load خاموش باشد، وزن‌های قبلی ۴۵/۴۰/۱۵ اعمال می‌شوند.)
-
-اگر مرحله‌ای انجام نشده باشد، وزن‌ها **بازتوزیع نمی‌شوند**؛ نتیجه `null` و وضعیت `incomplete` است. امتیاز خوش‌بینانه برای داده ناقص ساخته نمی‌شود.
-
-## برچسب اعتماد
-
-`provisional`، `low`، `medium`، `high` بر اساس تعداد نمونه و پخش‌شدگی در بلوک‌های زمانی مستقل. برچسب `high` یعنی «این اندازه‌گیری پایدار است»، نه «این IP خوب است».
+اگر بخشی ناقص باشد، نتیجه `partial` و امتیاز آن حداکثر ۷۰ است. ردیف‌های کامل همیشه پیش از partial رتبه می‌گیرند؛ eligibility-only امتیاز QoE دریافت نمی‌کند.
 
 ## رتبه‌بندی run-relative
 
-هر گزارش با `scope: "run-relative"` منتشر می‌شود. مقایسه امتیاز بین دو اجرا، دو دستگاه یا دو ISP در این روش پشتیبانی نمی‌شود.
-
----
-
-# Workload Settings
-
-### Web Transfer
-
-- `wikipedia` — پیش‌فرض
-- `cloudflare-docs`
-- `cloudflare-speed`
-
-### Streaming
-
-- `apple-bipbop` — پیش‌فرض
-- `bitmovin-sintel`
-- `mux-test-hls`
-
-YouTube به‌عنوان workload ثابت استفاده نشده، چون URL عمومی و پایدار `.m3u8` برای benchmark unattended ندارد.
+هر گزارش با `scope: "run-relative"` منتشر می‌شود. مقایسه امتیاز بین دو اجرا، دو دستگاه یا دو ISP پشتیبانی نمی‌شود.
 
 ---
 
 # فایل‌های خروجی
 
 ```text
-data/settings.json              تنظیمات کاربر (version 3)
+data/settings.json              تنظیمات کاربر (version 6)
 data/config.secret.uri          کانفیگ محافظت‌شده
-results/run-<id>.json           گزارش کامل (schema 7)
+results/run-<id>.json           گزارش کامل (schema 9)
 results/latest.json             آخرین گزارش
 results/best-ips.txt            رتبه‌بندی متنی
 results/hard-scan/*             checkpoint، صف retry و partial results
 logs/run-<id>.ndjson            لاگ ساخت‌یافته
 ```
-
----
 
 # حریم خصوصی و امنیت
 
@@ -277,9 +185,7 @@ logs/run-<id>.ndjson            لاگ ساخت‌یافته
 - داده‌ها فقط روی دستگاه کاربر ذخیره می‌شوند.
 - فایل‌های موقت Xray حذف می‌شوند.
 - فایل کانفیگ در Linux/Android permission محدود و در Windows ACL محدود دارد.
-- Xray از منبع رسمی دانلود و در صورت ارائه digest بررسی می‌شود.
-
----
+- نصب Xray بدون SHA-256 معتبر متوقف می‌شود.
 
 # خط فرمان
 
@@ -299,23 +205,19 @@ npm test
 فلگ‌های مفید:
 
 ```bash
-cfqoe scan --verify-limit 30     # تعداد finalistهای مرحله تأیید
-cfqoe scan --no-verify           # غیرفعال کردن SPRT
-cfqoe scan --no-retry            # غیرفعال کردن retry تأخیری
-cfqoe scan --abr                 # استریم با ABR واقعی
-cfqoe scan --no-load             # خاموش کردن مرحله Real Load
-cfqoe scan --load-duration 40    # ثانیه دانلود پیوسته در هر مشاهده
-cfqoe scan --load-chunk-mb 4     # حجم هر چانک دانلود (مگابایت)
+cfqoe scan --verify-limit 30
+cfqoe scan --no-verify
+cfqoe scan --no-retry
+cfqoe scan --lowest-variant
+cfqoe scan --no-load
+cfqoe scan --load-duration 40
+cfqoe scan --load-chunk-mb 4
 ```
-
----
 
 # دقت نتایج
 
-این روش از ping و burst speedtest به استفاده واقعی نزدیک‌تر است، اما نتیجه همچنان به ISP، Wi-Fi یا اپراتور، ساعت تست، workload و شرایط لحظه‌ای شبکه وابسته است. بهترین کاربرد ابزار، رتبه‌بندی نسبی IPها روی همان دستگاه و همان اتصال در همان بازه زمانی است.
-
----
+نتیجه به ISP، Wi-Fi یا اپراتور، ساعت تست، workload و شرایط لحظه‌ای شبکه وابسته است. بهترین کاربرد ابزار، رتبه‌بندی نسبی IPها روی همان دستگاه و همان اتصال در همان بازه زمانی است.
 
 # لایسنس
 
-این پروژه تحت **CFQoE Source-Available Attribution Non-Commercial License 1.0** منتشر می‌شود. استفاده و تغییر با ذکر منبع مجاز است؛ فروش، بازفروش و انتشار مجدد به نام شخص دیگر مجاز نیست. متن کامل در [LICENSE](LICENSE) قرار دارد.
+این پروژه تحت **CFQoE Source-Available Attribution Non-Commercial License 1.0** منتشر می‌شود. متن کامل در [LICENSE](LICENSE) قرار دارد.

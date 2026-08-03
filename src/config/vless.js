@@ -8,8 +8,36 @@ function decode(value) {
   }
 }
 
+// Android share sheets, messaging apps and some terminal emulators may wrap a
+// copied URI in bidi/zero-width marks, Markdown quotes, or bracketed-paste
+// control sequences. Normalise only transport artefacts; URI payload bytes are
+// otherwise left untouched.
+export function normalizeVlessInput(value) {
+  let text = String(value ?? '')
+    .replace(/\x1b\[200~/g, '')
+    .replace(/\x1b\[201~/g, '')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '')
+    .replace(/\r?\n/g, '')
+    .trim();
+
+  const wrappers = new Map([
+    ['`', '`'], ['"', '"'], ["'", "'"],
+    ['“', '”'], ['‘', '’'], ['«', '»'],
+  ]);
+  let changed = true;
+  while (changed && text.length >= 2) {
+    changed = false;
+    const closing = wrappers.get(text[0]);
+    if (closing && text.endsWith(closing)) {
+      text = text.slice(1, -1).trim();
+      changed = true;
+    }
+  }
+  return text;
+}
+
 export function parseVlessUri(uri) {
-  const text = String(uri || '').trim();
+  const text = normalizeVlessInput(uri);
   if (!text.toLowerCase().startsWith('vless://')) {
     throw new Error('Configuration must start with vless://');
   }
@@ -62,7 +90,6 @@ export function parseVlessUri(uri) {
   };
 }
 
-// Safe view for logs, reports and the terminal menu.
 export function describeVless(config) {
   return {
     address: config.address,

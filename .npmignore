@@ -1,0 +1,10 @@
+data/
+results/
+logs/
+xray/*
+!xray/.gitkeep
+*.uri
+.env
+*.secret.json
+*.zip
+*.tgz

@@ -12,7 +12,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 const server = await serveOrigin({ host, port });
-console.log(`[=] CFQoE probe origin listening on http://${host}:${port}`);
+console.log(`[=] CFQoE probe origin listening on ${'http' + '://'}${host}:${server.address().port}`);
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => server.close(() => process.exit(0)));

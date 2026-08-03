@@ -1,40 +1,26 @@
 # Changelog
 
-## 0.8.3
+## 0.8.4
 
 ### Fixed
-- ورودی گزینه 6 → 1 در Termux و سایر ترمینال‌ها اکنون نشانه‌های bidi/zero-width، bracketed paste و wrapperهای نقل‌قول را پاک‌سازی می‌کند، ورودی نامعتبر را در همان صفحه دوباره می‌پرسد و فایل ذخیره‌شده را مجدداً می‌خواند و اعتبارسنجی می‌کند.
-- `scan.rounds` دوباره روی اسکن عادی اعمال می‌شود و calibration واقعی concurrency پیش از اسکن اجرا می‌شود.
-- سقف بایت Web Transfer، Streaming و Real Load و همچنین flow/controlهای Hard Scan اکنون به probeها منتقل می‌شوند.
-- entry point سرور probe با پیاده‌سازی `src/origin/server.js` دوباره قابل اجرا است.
-- WebSocket 101 اکنون `Connection` و `Sec-WebSocket-Accept` را نیز اعتبارسنجی می‌کند.
-- بررسی حفاظت فایل در Windows دیگر همیشه موفق گزارش نمی‌شود و ACL واقعی را می‌خواند.
+- Full Scan دیگر بودجه سنگین Research را برای هر finalist اجرا نمی‌کند. Real Load دسکتاپ به ۱۲ MiB/۸ ثانیه و Android به ۸ MiB/۶ ثانیه محدود شده است.
+- timeout نمونه latency زیر بار حداکثر ۳ ثانیه است؛ ping معلق دیگر پایان Tunnel را تا timeout کامل عقب نمی‌اندازد.
+- `load.partial` که به معنی ناکافی‌بودن نمونه برای shaping یا uplink است دیگر warning تعاملی چاپ نمی‌کند و فقط در debug log ثبت می‌شود. شکست واقعی downlink همچنان `load.failed` است.
+- نوار Tunnel زیرمرحله فعلی Web Transfer، Streaming یا Real Load را نمایش می‌دهد.
+- تنظیمات نسخه ۶ با مقادیر پیش‌فرض سنگین، خودکار به تنظیمات سریع‌تر نسخه ۷ مهاجرت می‌کنند؛ مقادیر سفارشی کاربر حفظ می‌شوند.
 
 ### Changed
-- نسخه تنظیمات 6 و نسخه برنامه 0.8.3 است.
-- حالت گمراه‌کننده `abr` به `lowest` تغییر نام داده؛ alias قدیمی فقط برای سازگاری باقی مانده است.
-- نصب خودکار Xray در نبود SHA-256 معتبر متوقف می‌شود.
-- مجموعه تست‌ها به 137 تست افزایش یافت.
+- Research Scan همچنان بودجه عمیق ۲۴ MiB/۱۲ ثانیه و شش flow را حفظ می‌کند.
+- منوی Streaming نام صحیح `lowest` را نمایش می‌دهد.
+
+## 0.8.3
+
+- رفع ورود کانفیگ VLESS در Termux، اعمال calibration و traffic caps، اعتبارسنجی WebSocket و report schema 9.
 
 ## 0.7.0
 
-نسخه 0.6.0 آماری بود اما حجم اندازه‌گیری کوچک بود. 0.7.0 مرحله Real Load، گیت‌های مطلق، متریک‌های shaping و latency زیر بار، fan-out و uplink را اضافه کرد.
-
-### Added
-- مرحله Real Load و متریک‌های `sustainedMbps`، `shapingRatio`، `loadedRttMs`، `rpm`، `jitterMs`، `lossRate`، `fanoutSuccess` و `uplinkMbps`.
-- گیت‌های مطلق و برچسب‌های verdict.
-- تنظیمات بودجه و تخمین ترافیک.
+- Real Load، absolute gates، shaping و latency-under-load.
 
 ## 0.6.0
 
-- Wilson confidence intervals، امتیاز محافظه‌کارانه و برچسب اعتماد.
-- تأیید تطبیقی SPRT، calibration، delayed retry و POP summaries.
-- HLS prerequisites، buffer simulation و run-relative ranking.
-
-## 0.5.0
-
-- بازنویسی به ابزار دسکتاپ با منوی تعاملی، Windows، Android/Termux، browsing و streaming workloads.
-
-## 0.4.0
-
-- نسخه سرورمحور با VLESS tunnel probing و process management.
+- Wilson intervals، SPRT، calibration، delayed retry و run-relative ranking.

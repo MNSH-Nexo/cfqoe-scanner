@@ -1,11 +1,16 @@
 {
   "name": "cfqoe-scanner",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Adaptive Cloudflare edge quality scanner with statistically defensible confidence reporting",
   "type": "module",
-  "bin": { "cfqoe": "bin/cfqoe.js", "cfqoe-origin": "bin/cfqoe-origin.js" },
+  "bin": {
+    "cfqoe": "bin/cfqoe.js",
+    "cfqoe-origin": "bin/cfqoe-origin.js"
+  },
   "main": "src/cli.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node bin/cfqoe.js menu",
     "check": "node --check src/cli.js",
